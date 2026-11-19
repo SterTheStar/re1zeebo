@@ -11,6 +11,7 @@
 #include "../../system/ConfigFile.h"
 #include "../../marni/MarniDX.h"
 #include "../../marni/MarniSystem.h"
+#include "pandora_logo.h"
 #include "splash_image.h"
 
 #include <stdlib.h>
@@ -18,10 +19,40 @@
 
 extern void CleanupVideoConfigAndSaveAllSettings(void);
 
-static BOOL        s_displayApplyPending = FALSE;
-static BOOL        s_splashActive        = FALSE;
-static MarniHandle s_splashTex           = MARNI_NULL_HANDLE;
-static DWORD       s_splashStartMs       = 0;
+enum StartupStage {
+    STARTUP_NONE = 0,
+    STARTUP_PANDORA = 1,
+    STARTUP_WARNING = 2,
+};
+
+static BOOL         s_displayApplyPending = FALSE;
+static StartupStage s_startupStage        = STARTUP_NONE;
+static MarniHandle  s_splashTex           = MARNI_NULL_HANDLE;
+static DWORD        s_splashStartMs       = 0;
+
+static MarniHandle CreateRleTexture(int w, int h, const uint32_t* rle, uint32_t runs)
+{
+    MarniDX* dx = Marni_DX();
+    if (!dx || !dx->IsReady()) return MARNI_NULL_HANDLE;
+
+    size_t totalPixels = (size_t)w * (size_t)h;
+    uint32_t* rgba = (uint32_t*)malloc(totalPixels * sizeof(uint32_t));
+    if (!rgba) return MARNI_NULL_HANDLE;
+
+    size_t out = 0;
+    for (uint32_t r = 0; r < runs && out < totalPixels; ++r) {
+        uint32_t count = rle[r * 2 + 0];
+        uint32_t px    = rle[r * 2 + 1];
+        if (out + count > totalPixels) count = (uint32_t)(totalPixels - out);
+        for (uint32_t k = 0; k < count; ++k) {
+            rgba[out++] = px;
+        }
+    }
+
+    MarniHandle tex = dx->CreateTexture(w, h, 32, rgba, NULL, NULL);
+    free(rgba);
+    return tex;
+}
 
 static void FreeStartupSplash(void)
 {
@@ -32,43 +63,45 @@ static void FreeStartupSplash(void)
         }
         s_splashTex = MARNI_NULL_HANDLE;
     }
-    s_splashActive = FALSE;
+    s_startupStage = STARTUP_NONE;
+}
+
+static void StartWarningSplash(void)
+{
+    FreeStartupSplash();
+    s_splashTex = CreateRleTexture(ZEEBO_SPLASH_W, ZEEBO_SPLASH_H,
+                                   ZEEBO_SPLASH_RLE, ZEEBO_SPLASH_RLE_RUNS);
+    if (s_splashTex != MARNI_NULL_HANDLE) {
+        s_startupStage  = STARTUP_WARNING;
+        s_splashStartMs = plat_time_ms();
+    }
 }
 
 static void InitStartupSplash(void)
 {
-    MarniDX* dx = Marni_DX();
-    if (!dx || !dx->IsReady()) return;
-
-    size_t totalPixels = (size_t)ZEEBO_SPLASH_W * (size_t)ZEEBO_SPLASH_H;
-    uint32_t* rgba = (uint32_t*)malloc(totalPixels * sizeof(uint32_t));
-    if (!rgba) return;
-
-    size_t out = 0;
-    for (uint32_t r = 0; r < ZEEBO_SPLASH_RLE_RUNS && out < totalPixels; ++r) {
-        uint32_t count = ZEEBO_SPLASH_RLE[r * 2 + 0];
-        uint32_t px    = ZEEBO_SPLASH_RLE[r * 2 + 1];
-        if (out + count > totalPixels) count = (uint32_t)(totalPixels - out);
-        for (uint32_t k = 0; k < count; ++k) {
-            rgba[out++] = px;
-        }
-    }
-
-    s_splashTex = dx->CreateTexture(ZEEBO_SPLASH_W, ZEEBO_SPLASH_H, 32, rgba, NULL, NULL);
-    free(rgba);
-
+    s_splashTex = CreateRleTexture(ZEEBO_PANDORA_W, ZEEBO_PANDORA_H,
+                                   ZEEBO_PANDORA_RLE, ZEEBO_PANDORA_RLE_RUNS);
     if (s_splashTex != MARNI_NULL_HANDLE) {
-        s_splashActive  = TRUE;
+        s_startupStage  = STARTUP_PANDORA;
         s_splashStartMs = plat_time_ms();
+    } else {
+        StartWarningSplash();
     }
 }
 
 static BOOL TickStartupSplash(void)
 {
-    if (!s_splashActive) return FALSE;
+    if (s_startupStage == STARTUP_NONE) return FALSE;
 
-    DWORD elapsed = plat_time_ms() - s_splashStartMs;
-    if (elapsed >= 4200u) {
+    DWORD totalMs   = (s_startupStage == STARTUP_PANDORA) ? 2800u : 4200u;
+    DWORD fadeOutMs = 500u;
+    DWORD elapsed   = plat_time_ms() - s_splashStartMs;
+
+    if (elapsed >= totalMs) {
+        if (s_startupStage == STARTUP_PANDORA) {
+            StartWarningSplash();
+            return (s_startupStage != STARTUP_NONE);
+        }
         FreeStartupSplash();
         return FALSE;
     }
@@ -82,9 +115,9 @@ static BOOL TickStartupSplash(void)
     uint32_t alpha = 255u;
     if (elapsed < 400u) {
         alpha = (elapsed * 255u) / 400u;
-    } else if (elapsed > 3700u) {
-        DWORD rem = 4200u - elapsed;
-        alpha = (rem * 255u) / 500u;
+    } else if (elapsed > (totalMs - fadeOutMs)) {
+        DWORD rem = totalMs - elapsed;
+        alpha = (rem * 255u) / fadeOutMs;
     }
     if (alpha > 255u) alpha = 255u;
 
