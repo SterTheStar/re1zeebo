@@ -236,6 +236,7 @@ int Cinepak_DecodeFrame(CinepakDecoder* dec, const uint8_t* data, uint32_t size)
     if (numStrips > MAX_STRIPS) numStrips = MAX_STRIPS;
 
     uint32_t pos = 10;
+    uint16_t prevY1 = 0;
     for (uint16_t s = 0; s < numStrips && pos + 12 <= codedSize; ++s) {
         if (s > 0 && !(flags & 0x01)) {
             dec->strips[s] = dec->strips[s - 1];
@@ -246,6 +247,12 @@ int Cinepak_DecodeFrame(CinepakDecoder* dec, const uint8_t* data, uint32_t size)
         uint16_t x0        = ReadU16BE(data + pos + 6);
         uint16_t y1        = ReadU16BE(data + pos + 8);
         uint16_t x1        = ReadU16BE(data + pos + 10);
+
+        if (s > 0 && y0 < prevY1) {
+            y0 = (uint16_t)(y0 + prevY1);
+            y1 = (uint16_t)(y1 + prevY1);
+        }
+        prevY1 = y1;
 
         if (stripSize < 12 || pos + stripSize > codedSize) break;
 
@@ -261,8 +268,8 @@ int Cinepak_DecodeFrame(CinepakDecoder* dec, const uint8_t* data, uint32_t size)
 
             switch (chunkId) {
             case 0x2000: LoadCodebookFull(dec->strips[s].v4, payload, payloadSize); break;
-            case 0x2100: LoadCodebookFull(dec->strips[s].v1, payload, payloadSize); break;
-            case 0x2200: LoadCodebookPartial(dec->strips[s].v4, payload, payloadSize); break;
+            case 0x2100: LoadCodebookPartial(dec->strips[s].v4, payload, payloadSize); break;
+            case 0x2200: LoadCodebookFull(dec->strips[s].v1, payload, payloadSize); break;
             case 0x2300: LoadCodebookPartial(dec->strips[s].v1, payload, payloadSize); break;
             case 0x3000:
             case 0x3100:
