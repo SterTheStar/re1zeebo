@@ -8,7 +8,13 @@
 #   cmake -S . -B build/linux -DCMAKE_BUILD_TYPE=Release
 #   cmake --build build/linux -j
 cmake_minimum_required(VERSION 3.16)
-project(residentevil CXX)
+project(residentevil C CXX ASM)
+
+option(ZEEBO "Build for Zeebo / Qualcomm BREW 4.0.2" OFF)
+if(ZEEBO)
+    include(CMakeLists.zeebo.txt)
+    return()
+endif()
 
 if(WIN32)
     message(FATAL_ERROR

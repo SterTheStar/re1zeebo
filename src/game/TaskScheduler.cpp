@@ -186,6 +186,57 @@ static void TaskSwitch_Resume(void)
     ReturnToScheduler_Resume();
 }
 
+#elif defined(__ZEEBO__)
+
+// ============================================================================
+// ARMv6 cooperative task switching (Zeebo / BREW)
+// ============================================================================
+struct ArmTaskContext {
+    DWORD r4, r5, r6, r7, r8, r9, r10, r11;
+    DWORD sp;
+    DWORD lr;
+};
+
+extern "C" void Zeebo_Log(const char* fmt, ...);
+extern "C" void TaskSwitch_ArmSwap(ArmTaskContext* from, const ArmTaskContext* to);
+
+static ArmTaskContext s_SchedArmCtx;
+static ArmTaskContext s_TaskArmCtx[TASK_MAX];
+
+void Task_exit(void);
+
+static void TaskEntry(void)
+{
+    void (*fn)(void) = (void (*)(void))g_TasksEIP[g_CurrentTaskID];
+    fn();
+    Task_exit();
+}
+
+static void TaskSwitch_Start(void)
+{
+    int id = g_CurrentTaskID;
+    ArmTaskContext* ctx = &s_TaskArmCtx[id];
+    memset(ctx, 0, sizeof(*ctx));
+
+    // ARM EABI requires 8-byte stack alignment at function entry.
+    uintptr_t stackTop = ((uintptr_t)TaskStackBase(id) + TASK_STACK_SIZE) & ~(uintptr_t)7;
+    ctx->sp = (DWORD)stackTop;
+    ctx->lr = (DWORD)(uintptr_t)&TaskEntry;
+    Zeebo_Log("[TASK] Start id=%d fn=%p sp=%p\n", id, g_TasksEIP[id], (void*)stackTop);
+
+    TaskSwitch_ArmSwap(&s_SchedArmCtx, ctx);
+}
+
+static void TaskSwitch_Resume(void)
+{
+    TaskSwitch_ArmSwap(&s_SchedArmCtx, &s_TaskArmCtx[g_CurrentTaskID]);
+}
+
+static void TaskYield(void)
+{
+    TaskSwitch_ArmSwap(&s_TaskArmCtx[g_CurrentTaskID], &s_SchedArmCtx);
+}
+
 #else  // !(MSVC x86)
 
 // ============================================================================

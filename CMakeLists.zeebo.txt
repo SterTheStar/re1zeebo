@@ -1,0 +1,177 @@
+# CMakeLists.zeebo.txt - Modular Zeebo / BREW 4.0.2 build configuration.
+#
+# Usage:
+#   cmake -S . -B build/zeebo -C cmake/zeebo-arm.cmake -G Ninja
+#   (or pass -DCMAKE_TOOLCHAIN_FILE=cmake/zeebo-arm.cmake)
+cmake_minimum_required(VERSION 3.16)
+project(residentevil_zeebo C CXX ASM)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+set(RE1_SHARED_SOURCES
+    src/Globals.cpp
+    src/system/AssetPath.cpp
+    src/system/AudioFile.cpp
+    src/system/PngImage.cpp
+    src/system/WebpImage.cpp
+    src/system/ConfigFile.cpp
+
+    src/marni/MarniBits.cpp
+    src/marni/PSXTexture.cpp
+    src/marni/Marni3DObject.cpp
+    src/marni/MarniSystem.cpp
+    src/marni/MarniDX_GLES1.cpp
+
+    src/video/VideoPlayback.cpp
+
+    src/game/Bonus.cpp
+    src/game/CharacterSelectionScreen.cpp
+    src/game/CmdFunctions.cpp
+    src/game/CollisionDebug.cpp
+    src/game/ComputerLab.cpp
+    src/game/DeathScreen.cpp
+    src/game/DebugMenu.cpp
+    src/game/DebugSaveLoad.cpp
+    src/game/DebugScreens.cpp
+    src/game/DoorSystem.cpp
+    src/game/EffectSprites.cpp
+    src/game/EffectSystem.cpp
+    src/game/EndingScreen.cpp
+    src/game/Ps1EndingCredits.cpp
+    src/game/Ps1FmvSubtitles.cpp
+    src/game/EntityModelLoader.cpp
+    src/game/FadeSprite.cpp
+    src/game/FileLoader.cpp
+    src/game/GameInit.cpp
+    src/game/GameLoop.cpp
+    src/game/GameStart.cpp
+    src/game/GteMatrix.cpp
+    src/game/InputSystem.cpp
+    src/game/InteractiveScreen.cpp
+    src/game/JpnTextTables.cpp
+    src/game/LabSlides.cpp
+    src/game/LogosScreen.cpp
+    src/game/MainLoop.cpp
+    src/game/MainMenu.cpp
+    src/game/MenuData.cpp
+    src/game/ObjectManager.cpp
+    src/game/OptionsMenu.cpp
+    src/game/PathTrail.cpp
+    src/game/PlayerAnimations.cpp
+    src/game/HdText.cpp
+    src/game/PrintText.cpp
+    src/game/Rendering.cpp
+    src/game/Room.cpp
+    src/game/RoomBackgroundWebp.cpp
+    src/game/RoomCollision.cpp
+    src/game/RoomEvents.cpp
+    src/game/RoomInit.cpp
+    src/game/SaveLoadScreen.cpp
+    src/game/SoundApi.cpp
+    src/game/SoundSystem.cpp
+    src/game/SoundTables.cpp
+    src/game/SpriteRenderer.cpp
+    src/game/TaskScheduler.cpp
+    src/game/TaskScheduler_arm.S
+    src/game/TextureLoader.cpp
+    src/game/GameOptions.cpp
+    src/game/TitleMenuFont.cpp
+    src/game/TitleScreen.cpp
+    src/game/TmdAnimation.cpp
+    src/game/TmdRenderer.cpp
+    src/game/WeaponDamage.cpp
+    src/game/WeaponTexture.cpp
+
+    src/game/dc/WeaponDamageTables.cpp
+    src/game/dc/ItemTables.cpp
+    src/game/dc/ItemNames.cpp
+    src/game/dc/ItemModels.cpp
+    src/game/dc/ItemDescriptions.cpp
+    src/game/dc/Items.cpp
+    src/game/dc/EntityModels.cpp
+    src/game/dc/ArrangeStages.cpp
+    src/game/dc/ArrangeSoundRows.cpp
+
+    src/game/saturn/SaturnBattle.cpp
+    src/game/saturn/SaturnModels.cpp
+    src/game/saturn/SaturnRoomObjects.cpp
+    src/game/saturn/SaturnTick.cpp
+    src/game/saturn/SaturnTickAnim.cpp
+    src/game/saturn/SaturnTyrant.cpp
+
+    src/game/entities/Adder.cpp
+    src/game/entities/BlackTiger.cpp
+    src/game/entities/Cerberus.cpp
+    src/game/entities/CharacterNpc.cpp
+    src/game/entities/Chimera.cpp
+    src/game/entities/ComputerArms.cpp
+    src/game/entities/Crow.cpp
+    src/game/entities/EntityCommon.cpp
+    src/game/entities/Hunter.cpp
+    src/game/entities/MonsterPlant.cpp
+    src/game/entities/Neptune.cpp
+    src/game/entities/Plant42.cpp
+    src/game/entities/Plant42Roots.cpp
+    src/game/entities/SpiderWeb.cpp
+    src/game/entities/Tyrant.cpp
+    src/game/entities/Wasp.cpp
+    src/game/entities/WebSpinner.cpp
+    src/game/entities/Yawn.cpp
+    src/game/entities/Zombie.cpp
+)
+
+set(RE1_ZEEBO_PLATFORM_SOURCES
+    src/platform/zeebo/zeebo_brew.cpp
+    src/platform/zeebo/main.cpp
+    src/platform/zeebo/platform.cpp
+    src/platform/zeebo/input.cpp
+    src/platform/zeebo/audio.cpp
+    src/platform/zeebo/avi_demux.cpp
+    src/platform/zeebo/cinepak.cpp
+    src/platform/zeebo/video.cpp
+    src/platform/zeebo/config.cpp
+    src/platform/zeebo/crash.cpp
+    src/platform/zeebo/hd_textures_stub.cpp
+    src/platform/zeebo/syscalls.cpp
+    src/platform/zeebo/stubs.cpp
+)
+
+add_executable(re1zeebo.elf
+    ${RE1_SHARED_SOURCES}
+    ${RE1_ZEEBO_PLATFORM_SOURCES}
+)
+
+target_include_directories(re1zeebo.elf PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(re1zeebo.elf PRIVATE
+    __ZEEBO__=1
+    RE1_NO_HD_TEXTURES=1
+)
+
+target_compile_options(re1zeebo.elf PRIVATE
+    -w
+    -fsigned-char
+    -fno-strict-aliasing
+    -fno-strict-overflow
+    -fno-exceptions
+    -fno-rtti
+    -fno-threadsafe-statics
+    $<$<COMPILE_LANGUAGE:CXX>:-include>
+    $<$<COMPILE_LANGUAGE:CXX>:algorithm>
+)
+
+target_link_options(re1zeebo.elf PRIVATE
+    -T${CMAKE_CURRENT_SOURCE_DIR}/tools/zeebo/zeebo_mod.ld
+    -nostartfiles
+    -Wl,--gc-sections
+)
+
+if(ZEEBO_OBJCOPY)
+    add_custom_command(TARGET re1zeebo.elf POST_BUILD
+        COMMAND ${ZEEBO_OBJCOPY} -O binary $<TARGET_FILE:re1zeebo.elf> ${CMAKE_CURRENT_BINARY_DIR}/re1zeebo.mod
+        COMMENT "Generating BREW flat binary re1zeebo.mod"
+    )
+endif()

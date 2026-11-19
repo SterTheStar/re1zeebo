@@ -1588,9 +1588,12 @@ static bool ComposeHdIconPage(const DWORD* page, const std::vector<HdIconRegion>
 //   height   - height in pixels to copy
 //   mode     - CMarniBits sub-page index within the source slot
 // ============================================================================
+extern "C" void Zeebo_Log(const char* fmt, ...);
+
 void LoadImage(int srcData, int srcSlot, int dstSlot, short format,
                short x, short y, short width, short height, int mode) // 0x0046d3b0
 {
+    Zeebo_Log("[LI] enter dstSlot=%d srcSlot=%d\n", dstSlot, srcSlot);
     int destSlot = dstSlot + 0xF;
     int destCheck = destSlot * 0xDF;
     int destOff = destSlot * 0x37C;
@@ -1672,6 +1675,7 @@ void LoadImage(int srcData, int srcSlot, int dstSlot, short format,
     static std::vector<HdIconRegion> s_vramIcons[VRAM_PAGE_MAX_SLOTS];
 
     int vramIdx = srcOff & (VRAM_PAGE_MAX_SLOTS - 1);
+    Zeebo_Log("[LI] src=%p dst=%d w=%d h=%d bpp=%d vram=%d\n", (void*)srcData, destSlot, (int)width, (int)height, bpp, vramIdx);
     if (srcData != 0 && bpp == 2 && (int)width > 0 && (int)height > 0 && vramIdx >= 0 && vramIdx < VRAM_PAGE_MAX_SLOTS) {
         VRAMPage* vp = &s_vramPages[vramIdx];
         if (vp->rgba == NULL) {
@@ -1698,6 +1702,7 @@ void LoadImage(int srcData, int srcSlot, int dstSlot, short format,
         // LoadImage format=1 (16-bit) copies raw bytes; at 8bpp this means
         // width*2 bytes per row = width*2 pixels per row.
         TextureCLUTCache* clut = &g_CLUTCache[15];
+        Zeebo_Log("[LI] clut=%p bpp=%d entries=%d\n", clut->clutData, clut->bpp, clut->clutEntries);
         if (clut->clutData != NULL && clut->bpp == 8 && clut->clutEntries >= 256) {
             BYTE* src8 = (BYTE*)srcData;
             int pixW = (int)width * 2;
@@ -1781,9 +1786,11 @@ void LoadImage(int srcData, int srcSlot, int dstSlot, short format,
         }
 
         // Port-only: the page at HD size when one of its icons has a picture.
+        Zeebo_Log("[LI] before ComposeHdIconPage\n");
         std::vector<DWORD> hdPage;
         int hdSize = 0;
         const bool hd = ComposeHdIconPage(page, s_vramIcons[vramIdx], &hdPage, &hdSize);
+        Zeebo_Log("[LI] after ComposeHdIconPage hd=%d\n", (int)hd);
         for (int d = 0; d < vp->numDests; d++) {
             int slot = vp->destSlots[d];
             if (slot >= 0 && slot < 256) {

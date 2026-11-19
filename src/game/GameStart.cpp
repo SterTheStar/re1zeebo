@@ -14,6 +14,8 @@
 #include "../system/AssetPath.h"
 #include "../system/HdTextures.h"   // HD item icons (port-only)
 
+extern "C" void Zeebo_Log(const char* fmt, ...);
+
 extern void LoadImage_SetHdIconKey(const char* key);   // TextureLoader.cpp (port)
 extern const char* HdItemIconKey(const void* buffer, int row, char* out, size_t outSize);   // TextureLoader.cpp (port)
 
@@ -205,6 +207,8 @@ void LoadHeldItemsImages(void) // 0x00451640
     void* savedSlotPointer;
 
     CountHeldItems();
+    Zeebo_Log("[GS] CountHeldItems=%u ptr=%p imgBuf=%p\n",
+              (unsigned)g_TotalHeldItems, g_ItemSlotsPointer, g_ItemsImageBuffer);
     g_ItemSlotsBitmask = (1 << (g_TotalHeldItems & 0x1f)) - 1;
     totalItems = g_TotalHeldItems;
     savedSlotPointer = g_ItemSlotsPointer;
@@ -216,6 +220,7 @@ void LoadHeldItemsImages(void) // 0x00451640
         g_ItemSlotIndices[index] = totalItems;
         unsigned char itemId = ((unsigned char*)savedSlotPointer)[index * 2];
         unsigned char imageType = g_ItemImageLookupTable[itemId * 4];
+        Zeebo_Log("[GS] item idx=%u id=%u imgType=%u\n", index, (unsigned)itemId, (unsigned)imageType);
         LoadItemImage(imageType - 1, (int)index, (int)g_ItemsImageBuffer);
         savedSlotPointer = g_ItemSlotsPointer;
     }
@@ -577,7 +582,9 @@ void InitializeGame(void)
     g_defaultItemSlot = 0;
     DAT_00be9614 = 0;
 
+    Zeebo_Log("[GS] before LoadHeldItemsImages\n");
     LoadHeldItemsImages();
+    Zeebo_Log("[GS] after LoadHeldItemsImages\n");
 
     // 0x00480a0d: DAT_00d91bc0 = &g_RoomActionTable. Redundant in practice —
     // room_set -> room_action_table_reset rewinds the same tail pointer — but
@@ -610,16 +617,20 @@ void InitializeGame(void)
     g_scaPoolPtr = (DWORD)g_entityDataBlock + 6;
     g_scaPoolBase = (DWORD)g_entityDataBlock + 6;
 
+    Zeebo_Log("[GS] before Task_sleep(1)\n");
     Task_sleep(1);
+    Zeebo_Log("[GS] after Task_sleep(1)\n");
 
     {
         // Port-only: the player's skin and the weapon effect pages decode
         // behind the load instead of stalling it (HdTextures.h).
         HdDeferScope hdDefer;
         SetupCharacterData();
+        Zeebo_Log("[GS] after SetupCharacterData\n");
 
         g_loadDataDestPointer = g_shootDirEspBuffer;
         load_shoot_direction_data();
+        Zeebo_Log("[GS] after load_shoot_direction_data\n");
     }
 
     g_SndFadeType = 0;
@@ -634,6 +645,7 @@ void InitializeGame(void)
     g_main_state_flags = g_main_state_flags & ~MSF_ROOM_TRANSITION;
 
     init_room();
+    Zeebo_Log("[GS] after init_room\n");
 
     g_AttractModeIdleTimer = 1;
     update_room_bgm();
@@ -716,6 +728,7 @@ void game_start(void)
 // Loads a 20x30 16-bit item image from the buffer into a texture page slot.
 void LoadItemImage(int item_id, int image_index, int img_buffer) // 0x00443000
 {
+    Zeebo_Log("[LII] enter item_id=%d idx=%d buf=%p\n", item_id, image_index, (void*)img_buffer);
     // Port-only: name the icon after the file in the buffer and the item, so
     // an HD picture of it can stand in (TextureLoader.cpp, HD item icons).
     // In a mode, a row only borrows the base release's icon that shows the
