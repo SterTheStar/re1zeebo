@@ -1,135 +1,66 @@
-# Resident Evil 1 — Zeebo (BREW 4.0.2)
+<div align="center">
 
-Port nativo de **Resident Evil (1996 / PC)** para **Zeebo** (**Qualcomm BREW 4.0.2**, ARM11 / ARMv6K com VFPv2 e OpenGL ES 1.0/1.1), compilado como módulo `.mod` e testado no emulador **Zeebx (`zeebx-emu`)**.
+# Resident Evil 1 Zeebo
 
----
+Port nativo de **Resident Evil 1 (PC)** para **Zeebo (Qualcomm BREW 4.0.2)**
 
-## O que está implementado
+![Platform](https://img.shields.io/badge/Plataforma-Zeebo%20(BREW%204.0.2)-0066cc?style=flat-square)
+![Arch](https://img.shields.io/badge/CPU-ARMv6K%20%2B%20VFPv2-1f6feb?style=flat-square)
+![Graphics](https://img.shields.io/badge/GPU-OpenGL%20ES%201.1-2ea44f?style=flat-square)
+![Release](https://img.shields.io/badge/Release-v1.0-d73a49?style=flat-square)
 
-- **Plataforma BREW 4.0.2 (`src/platform/zeebo/`)**:
-  - Ciclo de vida `AEEMod_Load` / `IModule` / `IApplet` e loop de quadros em ~30 fps (`zeebo_brew.cpp`, `main.cpp`).
-  - Sistema de arquivos via `IFileMgr` / `IFile` com normalização de caminhos e leitura direta da pasta `USA/` (`platform.cpp`).
-  - Troca cooperativa de contexto para as tasks do jogo em Assembly ARMv6 (`src/game/TaskScheduler_arm.S`).
-  - Áudio PCM via `IMediaPCM` / `ISound` (`audio.cpp`).
-  - Vídeo FMV com demuxer AVI e decodificador Cinepak (`avi_demux.cpp`, `cinepak.cpp`, `video.cpp`).
-  - Entrada completa para **Z-Pad / Boomerang** via `IHID` / `IHIDDevice` e fallback de teclado via `EVT_KEY` (`input.cpp`).
-- **Renderização OpenGL ES 1.0/1.1 (`src/marni/MarniDX_GLES1.cpp`)**:
-  - Inicialização EGL 16-bit (`RGB565` + `DEPTH16`), saída `640x480` (4:3).
-  - Texturas PS1 TIM (4bpp/8bpp/16bpp/24bpp/32bpp) convertidas para `RGBA8888`, `GL_REPEAT` para UVs contínuas e cache de estado GLES1.
-  - Renderização 3D em perspectiva (`w` homogêneo + depth buffer `GL_LEQUAL`) e sprites/fundos 2D.
+</div>
+
+Port não oficial, gratuito e de código aberto desenvolvido por **Esther** ([pandoragg.eu.cc](https://pandoragg.eu.cc)). Sem vínculo oficial com a Capcom. **Nenhum arquivo original do jogo é incluído neste repositório.**
 
 ---
 
-## Como preparar os assets (obrigatório)
+## Recursos implementados
 
-O repositório **não inclui** os arquivos originais do jogo. Você precisa dos assets da versão de PC (por exemplo, a edição da **GOG** de *Resident Evil*).
+| Área | Detalhes |
+| :--- | :--- |
+| **Sistema (BREW 4.0.2)** | Ciclo `IApplet`, timer em 30 fps, heap/I/O via `pfnMalloc` e `IFileMgr`, troca de contexto ARMv6 (`TaskScheduler_arm.S`) |
+| **Gráficos (GLES 1.1)** | Contexto EGL `RGB565` + `DEPTH16` em `640x480`, texturas TIM em `RGBA8888`, perspectiva 3D com `w` e depth test |
+| **Desempenho** | Build `-O2` com hardware VFPv2 (`softfp`), cache de estado GLES1 e buffers reutilizáveis para modelos 3D |
+| **Cutscenes (FMV)** | Demuxer AVI em streaming, decodificador Cinepak e faixa de áudio PCM reproduzida via `IMedia` |
+| **Áudio e Controles** | Bancos WAV via `IMediaUtil` e suporte nativo ao Z-Pad via `IHID` (com fallback de teclado via `EVT_KEY`) |
 
-### 1. Localize a pasta `USA`
-Na instalação original do jogo no PC (ex.: `C:\GOG Games\Resident Evil\USA`), existe a pasta **`USA/`** contendo subpastas como:
+---
 
-```text
-USA/
-├── data/
-├── effspr/
-├── enemy/
-├── movie/
-├── objspr/
-├── players/
-├── sound/
-├── stage1/
-├── stage2/
-├── stage3/
-├── stage4/
-├── stage5/
-└── voice/
-```
+## Como preparar os assets
 
-> **Importante:** mantenha a estrutura de subpastas exatamente como está dentro de `USA/`. O código normaliza os caminhos e lê tudo a partir de `USA/...` no diretório do módulo.
+Você precisa dos arquivos da versão de PC (por exemplo, a edição da **GOG**). Localize a pasta **`USA/`** da instalação original e coloque-a dentro da pasta do módulo ao lado de `re1zeebo.mod` e `re1zeebo.mif`.
 
-### 2. Estrutura final da pasta do módulo no Zeebo / Zeebx
+Estrutura final da pasta descompactada (ex.: `re1zeebo/`): `re1zeebo.mod`, `re1zeebo.mif` e a pasta `USA/` (com `data/`, `enemy/`, `movie/`, `sound/`, `stage1/`..`stage5/`, etc.).
 
-O módulo deve ser distribuído como uma **pasta descompactada** (não `.zip`) contendo o binário `.mod`, o manifesto `.mif` e a pasta `USA/`:
-
-```text
-re1zeebo/
-├── re1zeebo.mod
-├── re1zeebo.mif
-└── USA/
-    ├── data/
-    ├── enemy/
-    ├── movie/
-    ├── sound/
-    ├── stage1/
-    └── ...
-```
-
-### 3. Copiando automaticamente com `package_mod.py`
-
-Depois de compilar o `re1zeebo.mod`, você pode montar a pasta `dist/zeebo/re1zeebo/` automaticamente com:
+Para montar a pasta automaticamente após compilar:
 
 ```powershell
-python tools/zeebo/package_mod.py `
-  --mod build/zeebo/re1zeebo.mod `
-  --assets "C:\GOG Games\Resident Evil\USA" `
-  --out-dir dist/zeebo/re1zeebo
+python tools/zeebo/package_mod.py --mod build/zeebo/re1zeebo.mod --assets "C:\GOG Games\Resident Evil\USA" --out-dir dist/zeebo/re1zeebo
 ```
-
-Se você já copiou a pasta `USA/` antes e só recompilou o código, basta atualizar o `re1zeebo.mod` dentro de `dist/zeebo/re1zeebo/`.
 
 ---
 
-## Como compilar
+## Como compilar e rodar
 
-### Pré-requisitos
-- **Arm GNU Toolchain** (`arm-none-eabi-gcc` / `arm-none-eabi-g++` no `PATH`)
-- **CMake** (>= 3.16)
-- **Ninja** (ou outro gerador compatível)
-- **Python 3** (para `tools/zeebo/package_mod.py`)
-
-### Build Release (ARMv6K + VFPv2 + `-O2`)
+Requisitos: **Arm GNU Toolchain** (`arm-none-eabi-gcc`), **CMake** (>= 3.16), **Ninja** e **Python 3**.
 
 ```powershell
-cmake -S . -B build/zeebo -G Ninja `
-  -DZEEBO=ON `
-  -DCMAKE_TOOLCHAIN_FILE=cmake/zeebo-arm.cmake `
-  -DCMAKE_BUILD_TYPE=Release
-
+cmake -S . -B build/zeebo -G Ninja -DZEEBO=ON -DCMAKE_TOOLCHAIN_FILE=cmake/zeebo-arm.cmake -DCMAKE_BUILD_TYPE=Release
 cmake --build build/zeebo -j 8
 ```
 
-A saída será gerada em:
-- `build/zeebo/re1zeebo.elf`
-- `build/zeebo/re1zeebo.mod` (binário flat BREW pronto para o Zeebo / Zeebx)
-
----
-
-## Como rodar no Zeebx
-
-1. Garanta que `dist/zeebo/re1zeebo/` tenha `re1zeebo.mod`, `re1zeebo.mif` e `USA/`.
-2. No **Zeebx**, aponte/carregue a pasta `dist/zeebo/re1zeebo/` (ou o arquivo `re1zeebo.mod`).
+O binário final será gerado em `build/zeebo/re1zeebo.mod`. Depois de copiar a pasta `USA/` para `dist/zeebo/re1zeebo/`, basta carregar a pasta no **Zeebx** ou no console.
 
 ---
 
 ## Controles (Z-Pad)
 
-- **D-Pad / Analógico**: movimentação e navegação nos menus
-- **B1 (`A`)**: confirmar / atirar / interagir
-- **B2 (`B`)**: cancelar / correr
-- **B3 (`X`) / B4 (`Y`)**: ações secundárias / inventário
-- **ZL / ZR / L2 / R2**: mirar / mapa / atalhos conforme mapeamento do jogo
-- **Start / Home**: pausa / menu
-
----
-
-## Estrutura dos arquivos do port Zeebo
-
-```text
-CMakeLists.zeebo.txt           # Configuração de build específica para Zeebo
-cmake/zeebo-arm.cmake          # Toolchain ARMv6K + VFPv2 (softfp)
-src/platform/zeebo/            # Camada BREW 4.0.2 (vídeo, áudio, input, FS, crashlog)
-src/marni/MarniDX_GLES1.cpp    # Backend gráfico OpenGL ES 1.0/1.1 + EGL
-src/marni/MarniGLES1Funcs.h    # Tabela de funções GLES1 via AEEGLES
-src/game/TaskScheduler_arm.S   # Context switch cooperativo ARMv6
-tools/zeebo/package_mod.py     # Gera .mif e copia .mod + pasta USA/
-tools/zeebo/zeebo_mod.ld       # Linker script do módulo flat BREW
-```
+| Botão | Ação |
+| :--- | :--- |
+| **D-Pad / Analógico** | Movimentação e navegação nos menus |
+| **B1 (`A`)** | Confirmar, atirar, interagir |
+| **B2 (`B`)** | Cancelar, correr |
+| **B3 (`X`) / B4 (`Y`)** | Inventário / ações secundárias |
+| **ZL / ZR / L2 / R2** | Mirar / mapa / atalhos |
+| **Start / Home** | Pausa / menu |
