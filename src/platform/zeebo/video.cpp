@@ -12,9 +12,12 @@ namespace {
 
 PlatVideoOverlayCallback s_overlayCb = NULL;
 
-AviDemux*       s_avi       = NULL;
-CinepakDecoder* s_cinepak   = NULL;
-MarniHandle     s_tex       = MARNI_NULL_HANDLE;
+AviDemux*       s_avi          = NULL;
+CinepakDecoder* s_cinepak      = NULL;
+MarniHandle     s_tex          = MARNI_NULL_HANDLE;
+IMedia*         s_audioMedia   = NULL;
+uint8_t*        s_audioWav     = NULL;
+uint32_t        s_audioWavSize = 0;
 
 int    s_width       = 0;
 int    s_height      = 0;
@@ -27,8 +30,52 @@ BOOL   s_active      = FALSE;
 BOOL   s_endEvent    = FALSE;
 BOOL   s_eof         = FALSE;
 
+void StopVideoAudio(void)
+{
+    if (s_audioMedia && s_audioMedia->pvt) {
+        s_audioMedia->pvt->Stop(s_audioMedia);
+        s_audioMedia->pvt->Release(s_audioMedia);
+    }
+    s_audioMedia = NULL;
+    free(s_audioWav);
+    s_audioWav = NULL;
+    s_audioWavSize = 0;
+}
+
+void StartVideoAudio(int fromMs)
+{
+    StopVideoAudio();
+    if (!s_avi || !g_Zeebo.pMediaUtil || !g_Zeebo.pMediaUtil->pvt) return;
+
+    if (!AviDemux_ExtractWav(s_avi, fromMs, &s_audioWav, &s_audioWavSize)) {
+        return;
+    }
+
+    AEEMediaData md;
+    md.clsData = MMD_BUFFER;
+    md.pData   = s_audioWav;
+    md.dwSize  = s_audioWavSize;
+
+    IMedia* m = NULL;
+    int rc = g_Zeebo.pMediaUtil->pvt->CreateMedia(g_Zeebo.pMediaUtil, &md, &m);
+    Zeebo_Log("[VID] audio CreateMedia(MMD_BUFFER, %u bytes) -> rc=%d media=%p\n",
+              (unsigned)s_audioWavSize, rc, m);
+    if (rc == AEE_SUCCESS && m && m->pvt) {
+        s_audioMedia = m;
+        m->pvt->SetMediaParm(m, (int)MM_PARM_PLAY_REPEAT, 1, 0);
+        m->pvt->SetMediaParm(m, (int)MM_PARM_VOLUME, 100, 0);
+        m->pvt->Play(m);
+    } else {
+        if (m && m->pvt) m->pvt->Release(m);
+        free(s_audioWav);
+        s_audioWav = NULL;
+        s_audioWavSize = 0;
+    }
+}
+
 void FreeVideoResources(void)
 {
+    StopVideoAudio();
     if (s_tex != MARNI_NULL_HANDLE) {
         MarniDX* dx = Marni_DX();
         if (dx) {
@@ -153,6 +200,7 @@ BOOL plat_video_open_and_play(const char* path, int playToMs)
 
     s_active = TRUE;
     SeekToFrame(0);
+    StartVideoAudio(0);
     PresentFrame();
     return TRUE;
 }
@@ -174,11 +222,13 @@ void plat_video_play_from(int fromMs)
     s_endEvent    = FALSE;
     s_active      = TRUE;
     SeekToFrame(fromFrame);
+    StartVideoAudio(fromMs);
     PresentFrame();
 }
 
 void plat_video_stop(void)
 {
+    StopVideoAudio();
     s_active = FALSE;
 }
 
