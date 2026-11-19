@@ -106,12 +106,7 @@ A saída será gerada em:
 ## Como rodar no Zeebx
 
 1. Garanta que `dist/zeebo/re1zeebo/` tenha `re1zeebo.mod`, `re1zeebo.mif` e `USA/`.
-2. No **Zeebx Qt**, aponte/carregue a pasta ou o arquivo `dist/zeebo/re1zeebo/re1zeebo.mod`.
-3. Pelo terminal (usando `zeebx-headless.exe` em `tools/zeebx-emu/`):
-
-```powershell
-.\tools\zeebo\run_zeebx.ps1
-```
+2. No **Zeebx**, aponte/carregue a pasta `dist/zeebo/re1zeebo/` (ou o arquivo `re1zeebo.mod`).
 
 ---
 
@@ -137,5 +132,4 @@ src/marni/MarniGLES1Funcs.h    # Tabela de funções GLES1 via AEEGLES
 src/game/TaskScheduler_arm.S   # Context switch cooperativo ARMv6
 tools/zeebo/package_mod.py     # Gera .mif e copia .mod + pasta USA/
 tools/zeebo/zeebo_mod.ld       # Linker script do módulo flat BREW
-tools/zeebo/run_zeebx.ps1      # Atalho para rodar no zeebx-headless
 ```
