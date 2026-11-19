@@ -177,11 +177,15 @@ extern "C" void Zeebo_OnFrameTick(void)
         return;
     }
 
-    if (plat_video_is_active()) {
-        plat_video_tick();
-    } else {
-        main_loop();
+    if (g_bMCINotifyEnabled) {
+        if (g_bMCINotifyFlag) {
+            UpdateVideoPlayback();
+            return;
+        }
+        g_bMCINotifyFlag = TRUE;
     }
+
+    main_loop();
 }
 
 extern "C" void Zeebo_OnAppStop(void)
