@@ -185,7 +185,41 @@ struct MarniDX::Impl {
         uint32_t tex = 0;
         int w = 0, h = 0;
         unsigned int serial = 0;
+        int lastFilter = -1;
     } slots[MARNI_MAX_TEXTURES];
+
+    uint32_t boundGlTex = 0;
+    bool tex2dEnabled = false;
+    int lastBlend = -1;
+    bool depthTestEnabled = false;
+    bool depthWriteEnabled = true;
+    bool orthoActive = true;
+    bool clientArraysEnabled = false;
+
+    void ResetStateCache() {
+        boundGlTex = 0;
+        tex2dEnabled = false;
+        lastBlend = -1;
+        depthTestEnabled = false;
+        depthWriteEnabled = true;
+        orthoActive = true;
+    }
+
+    void SetDepthState(bool test, bool write) {
+        if (test != depthTestEnabled) {
+            depthTestEnabled = test;
+            if (test) {
+                glEnable(GLES1_DEPTH_TEST);
+                glDepthFunc(GLES1_LEQUAL);
+            } else {
+                glDisable(GLES1_DEPTH_TEST);
+            }
+        }
+        if (write != depthWriteEnabled) {
+            depthWriteEnabled = write;
+            glDepthMask(write ? GLES1_TRUE : GLES1_FALSE);
+        }
+    }
 
     void UpdateView() {
         viewX = 0; viewY = 0; viewW = width; viewH = height;
@@ -201,57 +235,77 @@ struct MarniDX::Impl {
     }
 
     void ApplyBlendAndSampler(MarniHandle tex, MarniSampler sampler, MarniBlend blend) {
+        uint32_t targetGlTex = 0;
+        TexSlot* targetSlot = NULL;
         if (tex != MARNI_NULL_HANDLE && tex < MARNI_MAX_TEXTURES && slots[tex].tex != 0) {
-            glEnable(GLES1_TEXTURE_2D);
-            glBindTexture(GLES1_TEXTURE_2D, slots[tex].tex);
+            targetGlTex = slots[tex].tex;
+            targetSlot = &slots[tex];
         } else if (whiteHandle != MARNI_NULL_HANDLE && slots[whiteHandle].tex != 0) {
-            glEnable(GLES1_TEXTURE_2D);
-            glBindTexture(GLES1_TEXTURE_2D, slots[whiteHandle].tex);
-        } else {
-            glDisable(GLES1_TEXTURE_2D);
+            targetGlTex = slots[whiteHandle].tex;
+            targetSlot = &slots[whiteHandle];
         }
 
-        int filter = (sampler == MARNI_SAMPLER_LINEAR) ? GLES1_LINEAR : GLES1_NEAREST;
-        glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_MIN_FILTER, filter);
-        glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_MAG_FILTER, filter);
+        if (targetGlTex != 0) {
+            if (!tex2dEnabled) {
+                glEnable(GLES1_TEXTURE_2D);
+                tex2dEnabled = true;
+            }
+            if (boundGlTex != targetGlTex) {
+                glBindTexture(GLES1_TEXTURE_2D, targetGlTex);
+                boundGlTex = targetGlTex;
+            }
+            int filter = (sampler == MARNI_SAMPLER_LINEAR) ? GLES1_LINEAR : GLES1_NEAREST;
+            if (targetSlot->lastFilter != filter) {
+                targetSlot->lastFilter = filter;
+                glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_MIN_FILTER, filter);
+                glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_MAG_FILTER, filter);
+            }
+        } else if (tex2dEnabled) {
+            glDisable(GLES1_TEXTURE_2D);
+            tex2dEnabled = false;
+        }
 
-        switch (blend) {
-        case MARNI_BLEND_DISABLE:
-            glDisable(GLES1_BLEND);
-            break;
-        case MARNI_BLEND_ADD:
-            glEnable(GLES1_BLEND);
-            glBlendFunc(GLES1_ONE, GLES1_ONE);
-            break;
-        case MARNI_BLEND_ADD_ALPHA:
-            glEnable(GLES1_BLEND);
-            glBlendFunc(GLES1_SRC_ALPHA, GLES1_ONE);
-            break;
-        case MARNI_BLEND_ALPHA:
-        default:
-            glEnable(GLES1_BLEND);
-            glBlendFunc(GLES1_SRC_ALPHA, GLES1_ONE_MINUS_SRC_ALPHA);
-            break;
+        if (lastBlend != (int)blend) {
+            lastBlend = (int)blend;
+            switch (blend) {
+            case MARNI_BLEND_DISABLE:
+                glDisable(GLES1_BLEND);
+                break;
+            case MARNI_BLEND_ADD:
+                glEnable(GLES1_BLEND);
+                glBlendFunc(GLES1_ONE, GLES1_ONE);
+                break;
+            case MARNI_BLEND_ADD_ALPHA:
+                glEnable(GLES1_BLEND);
+                glBlendFunc(GLES1_SRC_ALPHA, GLES1_ONE);
+                break;
+            case MARNI_BLEND_ALPHA:
+            default:
+                glEnable(GLES1_BLEND);
+                glBlendFunc(GLES1_SRC_ALPHA, GLES1_ONE_MINUS_SRC_ALPHA);
+                break;
+            }
         }
     }
 
     void SubmitTriangles(const Gles1Vertex* v, int vertCount, int posComponents = 3) {
-        glEnableClientState(GLES1_VERTEX_ARRAY);
-        glEnableClientState(GLES1_TEXTURE_COORD_ARRAY);
-        glEnableClientState(GLES1_COLOR_ARRAY);
+        if (!clientArraysEnabled) {
+            glEnableClientState(GLES1_VERTEX_ARRAY);
+            glEnableClientState(GLES1_TEXTURE_COORD_ARRAY);
+            glEnableClientState(GLES1_COLOR_ARRAY);
+            clientArraysEnabled = true;
+        }
 
         glVertexPointer(posComponents, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].x);
         glTexCoordPointer(2, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].u);
         glColorPointer(4, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].r);
 
         glDrawArrays(GLES1_TRIANGLES, 0, vertCount);
-
-        glDisableClientState(GLES1_COLOR_ARRAY);
-        glDisableClientState(GLES1_TEXTURE_COORD_ARRAY);
-        glDisableClientState(GLES1_VERTEX_ARRAY);
     }
 
     void SetOrthoProjection() {
+        if (orthoActive) return;
+        orthoActive = true;
         glMatrixMode(GLES1_PROJECTION);
         glLoadIdentity();
         glOrthof(0.0f, (float)viewW, (float)viewH, 0.0f, 1.0f, -1.0f);
@@ -260,6 +314,8 @@ struct MarniDX::Impl {
     }
 
     void SetIdentityProjection() {
+        if (!orthoActive) return;
+        orthoActive = false;
         glMatrixMode(GLES1_PROJECTION);
         glLoadIdentity();
         glMatrixMode(GLES1_MODELVIEW);
@@ -269,10 +325,12 @@ struct MarniDX::Impl {
     void ReleaseSlot(MarniHandle h) {
         if (h == MARNI_NULL_HANDLE || h >= MARNI_MAX_TEXTURES) return;
         if (slots[h].tex != 0) {
+            if (boundGlTex == slots[h].tex) boundGlTex = 0;
             glDeleteTextures(1, &slots[h].tex);
         }
         slots[h].tex = 0;
         slots[h].w = slots[h].h = 0;
+        slots[h].lastFilter = -1;
         slots[h].serial++;
     }
 };
@@ -447,6 +505,7 @@ void MarniDX::Clear(float r, float g, float b, float a)
     glClearColor(r, g, b, a);
     glClearDepthf(1.0f);
     glClear(GLES1_COLOR_BUFFER_BIT | GLES1_DEPTH_BUFFER_BIT);
+    m_pImpl->ResetStateCache();
 }
 
 void MarniDX::Present()
@@ -489,6 +548,7 @@ MarniHandle MarniDX::CreateTexture(int width, int height, int bpp, const void* p
     if (glTex == 0) return MARNI_NULL_HANDLE;
 
     glBindTexture(GLES1_TEXTURE_2D, glTex);
+    m_pImpl->boundGlTex = glTex;
     glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_WRAP_S, GLES1_REPEAT);
     glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_WRAP_T, GLES1_REPEAT);
     glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_MIN_FILTER, GLES1_NEAREST);
@@ -502,6 +562,7 @@ MarniHandle MarniDX::CreateTexture(int width, int height, int bpp, const void* p
     m_pImpl->slots[slot].tex = glTex;
     m_pImpl->slots[slot].w   = width;
     m_pImpl->slots[slot].h   = height;
+    m_pImpl->slots[slot].lastFilter = GLES1_NEAREST;
 
     if (outWidth)  *outWidth  = width;
     if (outHeight) *outHeight = height;
@@ -525,7 +586,10 @@ BOOL MarniDX::UpdateTexturePixels(MarniHandle tex, const void* pixelData,
     uint8_t* rgba = ConvertToRGBA8888(width, height, bpp, pixelData);
     if (!rgba) return FALSE;
 
-    glBindTexture(GLES1_TEXTURE_2D, m_pImpl->slots[tex].tex);
+    if (m_pImpl->boundGlTex != m_pImpl->slots[tex].tex) {
+        glBindTexture(GLES1_TEXTURE_2D, m_pImpl->slots[tex].tex);
+        m_pImpl->boundGlTex = m_pImpl->slots[tex].tex;
+    }
     glTexSubImage2D(GLES1_TEXTURE_2D, 0, 0, 0, width, height,
                     GLES1_RGBA, GLES1_UNSIGNED_BYTE, rgba);
     free(rgba);
@@ -539,11 +603,19 @@ BOOL MarniDX::ReplaceTexture(MarniHandle tex, int width, int height, const void*
     }
     if (m_pImpl->slots[tex].tex == 0 || !rgba32) return FALSE;
 
-    glBindTexture(GLES1_TEXTURE_2D, m_pImpl->slots[tex].tex);
-    glTexImage2D(GLES1_TEXTURE_2D, 0, GLES1_RGBA, width, height, 0,
-                 GLES1_RGBA, GLES1_UNSIGNED_BYTE, rgba32);
-    m_pImpl->slots[tex].w = width;
-    m_pImpl->slots[tex].h = height;
+    if (m_pImpl->boundGlTex != m_pImpl->slots[tex].tex) {
+        glBindTexture(GLES1_TEXTURE_2D, m_pImpl->slots[tex].tex);
+        m_pImpl->boundGlTex = m_pImpl->slots[tex].tex;
+    }
+    if (m_pImpl->slots[tex].w == width && m_pImpl->slots[tex].h == height) {
+        glTexSubImage2D(GLES1_TEXTURE_2D, 0, 0, 0, width, height,
+                        GLES1_RGBA, GLES1_UNSIGNED_BYTE, rgba32);
+    } else {
+        glTexImage2D(GLES1_TEXTURE_2D, 0, GLES1_RGBA, width, height, 0,
+                     GLES1_RGBA, GLES1_UNSIGNED_BYTE, rgba32);
+        m_pImpl->slots[tex].w = width;
+        m_pImpl->slots[tex].h = height;
+    }
     return TRUE;
 }
 
@@ -589,7 +661,8 @@ void MarniDX::DrawSprite(float x, float y, float w, float h,
         { x,     y + h, 0.0f, 1.0f, u0, v1, r, g, b, a },
     };
 
-    glDisable(GLES1_DEPTH_TEST);
+    m_pImpl->SetOrthoProjection();
+    m_pImpl->SetDepthState(false, true);
     m_pImpl->ApplyBlendAndSampler(tex, sampler, blend);
     m_pImpl->SubmitTriangles(q, 6);
 }
@@ -624,7 +697,8 @@ void MarniDX::DrawLine(float x0, float y0, float x1, float y1,
         { x0 + nx, y0 + ny, 0.0f, 1.0f, 0.0f, 1.0f, r, g, b, a },
     };
 
-    glDisable(GLES1_DEPTH_TEST);
+    m_pImpl->SetOrthoProjection();
+    m_pImpl->SetDepthState(false, true);
     m_pImpl->ApplyBlendAndSampler(MARNI_NULL_HANDLE, MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA);
     m_pImpl->SubmitTriangles(q, 6);
 }
@@ -641,7 +715,8 @@ void MarniDX::DrawTriangles(const float* verts, int triCount, MarniHandle tex,
         s_scratchVerts[i] = { v[0], v[1], 0.0f, 1.0f, v[2], v[3], v[4], v[5], v[6], v[7] };
     }
 
-    glDisable(GLES1_DEPTH_TEST);
+    m_pImpl->SetOrthoProjection();
+    m_pImpl->SetDepthState(false, true);
     m_pImpl->ApplyBlendAndSampler(tex, sampler, blend);
     m_pImpl->SubmitTriangles(s_scratchVerts, count, 3);
 }
@@ -664,20 +739,10 @@ void MarniDX::DrawTrianglesPersp(const float* verts, int triCount, MarniHandle t
         s_scratchVerts[i] = { ndcX * w, ndcY * w, ndcZ * w, w, v[4], v[5], v[6], v[7], v[8], v[9] };
     }
 
-    if (depthTest) {
-        glEnable(GLES1_DEPTH_TEST);
-        glDepthFunc(GLES1_LEQUAL);
-        glDepthMask(GLES1_FALSE);
-    } else {
-        glDisable(GLES1_DEPTH_TEST);
-    }
-
+    m_pImpl->SetDepthState(depthTest, false);
     m_pImpl->SetIdentityProjection();
     m_pImpl->ApplyBlendAndSampler(tex, sampler, blend);
     m_pImpl->SubmitTriangles(s_scratchVerts, count, 4);
-    m_pImpl->SetOrthoProjection();
-    glDisable(GLES1_DEPTH_TEST);
-    glDepthMask(GLES1_TRUE);
 }
 
 void MarniDX::DrawTriangles3D(const float* verts, int triCount, MarniHandle tex,
@@ -705,17 +770,10 @@ void MarniDX::DrawTriangles3D(const float* verts, int triCount, MarniHandle tex,
         s_scratchVerts[i] = { ndcX * w, ndcY * w, ndcZ * w, w, v[4], v[5], v[6], v[7], v[8], v[9] };
     }
 
-    glEnable(GLES1_DEPTH_TEST);
-    glDepthFunc(GLES1_LEQUAL);
-    glDepthMask(depthWrite ? GLES1_TRUE : GLES1_FALSE);
-
+    m_pImpl->SetDepthState(true, depthWrite);
     m_pImpl->SetIdentityProjection();
     m_pImpl->ApplyBlendAndSampler(tex, sampler, blend);
     m_pImpl->SubmitTriangles(s_scratchVerts, count, 4);
-    m_pImpl->SetOrthoProjection();
-
-    glDisable(GLES1_DEPTH_TEST);
-    glDepthMask(GLES1_TRUE);
 }
 
 BOOL MarniDX::CaptureBackbufferToRGBA(void** outPixels, DWORD* outWidth, DWORD* outHeight)

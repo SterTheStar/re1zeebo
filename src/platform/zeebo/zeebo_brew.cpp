@@ -4,6 +4,7 @@
 // hardware) can load the compiled .mod binary, create the applet instance,
 // and dispatch EVT_APP_START / EVT_APP_STOP / EVT_KEY / timer ticks.
 #include "zeebo_brew.h"
+#include "../platform.h"
 
 #include <string.h>
 
@@ -43,11 +44,15 @@ static void FrameTimerCallback(void* pUser)
     if (!g_Zeebo.bRunning) {
         return;
     }
+    uint32_t startMs = plat_time_ms();
     Zeebo_OnFrameTick();
+    uint32_t elapsed = plat_time_ms() - startMs;
 
-    // Rearm 33 ms (~30 fps) timer matching RE1's original 0x21 ms tick.
+    // Target 33 ms (~30 fps) total frame period matching RE1's original 0x21 ms tick,
+    // while always yielding at least 8 ms so the BREW/emulator event loop stays responsive.
     if (g_Zeebo.bRunning && g_Zeebo.pShell) {
-        ISHELL_SetTimer(g_Zeebo.pShell, 33, FrameTimerCallback, NULL);
+        int32_t delay = (elapsed >= 25u) ? 8 : (int32_t)(33u - elapsed);
+        ISHELL_SetTimer(g_Zeebo.pShell, delay, FrameTimerCallback, NULL);
     }
 }
 

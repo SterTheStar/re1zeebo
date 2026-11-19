@@ -18,7 +18,7 @@ set(CMAKE_C_COMPILER   "${ZEEBO_CC}")
 set(CMAKE_CXX_COMPILER "${ZEEBO_CXX}")
 set(CMAKE_ASM_COMPILER "${ZEEBO_CC}")
 
-set(ZEEBO_ARCH_FLAGS "-march=armv6k -marm -mfloat-abi=soft")
+set(ZEEBO_ARCH_FLAGS "-march=armv6k -marm -mfpu=vfp -mfloat-abi=softfp")
 set(CMAKE_C_FLAGS_INIT   "${ZEEBO_ARCH_FLAGS}")
 set(CMAKE_CXX_FLAGS_INIT "${ZEEBO_ARCH_FLAGS}")
 set(CMAKE_ASM_FLAGS_INIT "${ZEEBO_ARCH_FLAGS}")

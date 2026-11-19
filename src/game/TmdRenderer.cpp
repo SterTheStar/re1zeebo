@@ -577,19 +577,30 @@ void FlushTmdObjects(void)
             if (knockTex != MARNI_NULL_HANDLE && !renderStateModelActive)
                 unlit = false;
 
-            // Transform + project + light every vertex
-            // (heap-allocate per object; vertex counts are small)
-            float* sx = (float*)malloc(sizeof(float) * vtxCount * 4);
+            // Transform + project + light every vertex using a reusable scratch buffer.
+            static float* s_vtxScratch = NULL;
+            static char*  s_clipScratch = NULL;
+            static int    s_vtxScratchCap = 0;
+            if (vtxCount > s_vtxScratchCap) {
+                int newCap = (vtxCount < 256) ? 256 : vtxCount;
+                float* newF = (float*)realloc(s_vtxScratch, sizeof(float) * newCap * 7);
+                char*  newC = (char*)realloc(s_clipScratch, (size_t)newCap);
+                if (!newF || !newC) {
+                    if (newF) s_vtxScratch = newF;
+                    if (newC) s_clipScratch = newC;
+                    continue;
+                }
+                s_vtxScratch = newF;
+                s_clipScratch = newC;
+                s_vtxScratchCap = newCap;
+            }
+            float* sx = s_vtxScratch;
             float* sy = sx + vtxCount;
             float* vzArr = sx + vtxCount * 2;   // view-space Z, for the depth sort
-            float* cr = (float*)malloc(sizeof(float) * vtxCount * 3);
-            float* cg = cr + vtxCount;
-            float* cb = cg + vtxCount;
-            char* clipped = (char*)malloc(vtxCount);
-            if (!sx || !cr || !clipped) {
-                free(sx); free(cr); free(clipped);
-                continue;
-            }
+            float* cr = sx + vtxCount * 3;
+            float* cg = sx + vtxCount * 4;
+            float* cb = sx + vtxCount * 5;
+            char* clipped = s_clipScratch;
 
             // First normal (flat-shaded primitives only fill vertex 0)
             float flatN[3] = { vbuf[3], vbuf[4], vbuf[5] };
@@ -779,7 +790,6 @@ void FlushTmdObjects(void)
                 }
             }
 
-            free(sx); free(cr); free(clipped);
         }
 
         // The depth buffer resolves which face wins, so the sort is no longer

@@ -46,15 +46,21 @@ static uint8_t ClampU8(int v)
     return (uint8_t)v;
 }
 
-static void WritePixelYUV(uint8_t* dst, uint8_t y, int8_t u, int8_t v)
+static inline uint32_t PackPixelYUV(uint8_t y, int8_t u, int8_t v)
 {
     int c = (int)y;
     int d = (int)u;
     int e = (int)v;
-    dst[0] = ClampU8(c + ((e * 359) >> 8));
-    dst[1] = ClampU8(c - ((d * 88 + e * 183) >> 8));
-    dst[2] = ClampU8(c + ((d * 454) >> 8));
-    dst[3] = 255;
+    uint8_t r = ClampU8(c + ((e * 359) >> 8));
+    uint8_t g = ClampU8(c - ((d * 88 + e * 183) >> 8));
+    uint8_t b = ClampU8(c + ((d * 454) >> 8));
+    return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | 0xFF000000u;
+}
+
+static void WritePixelYUV(uint8_t* dst, uint8_t y, int8_t u, int8_t v)
+{
+    uint32_t px = PackPixelYUV(y, u, v);
+    memcpy(dst, &px, 4);
 }
 
 static void DrawBlockV1(CinepakDecoder* dec, int x, int y, const CinepakCodebook* cb)
@@ -63,16 +69,20 @@ static void DrawBlockV1(CinepakDecoder* dec, int x, int y, const CinepakCodebook
     int stride = dec->width * 4;
     uint8_t* p = dec->rgba + y * stride + x * 4;
 
-    uint8_t ys[4] = { cb->y0, cb->y1, cb->y2, cb->y3 };
-    for (int py = 0; py < 4; ++py) {
-        uint8_t* row = p + py * stride;
-        uint8_t yL = ys[(py >> 1) * 2 + 0];
-        uint8_t yR = ys[(py >> 1) * 2 + 1];
-        WritePixelYUV(row + 0,  yL, cb->u, cb->v);
-        WritePixelYUV(row + 4,  yL, cb->u, cb->v);
-        WritePixelYUV(row + 8,  yR, cb->u, cb->v);
-        WritePixelYUV(row + 12, yR, cb->u, cb->v);
-    }
+    uint32_t c00 = PackPixelYUV(cb->y0, cb->u, cb->v);
+    uint32_t c01 = PackPixelYUV(cb->y1, cb->u, cb->v);
+    uint32_t c10 = PackPixelYUV(cb->y2, cb->u, cb->v);
+    uint32_t c11 = PackPixelYUV(cb->y3, cb->u, cb->v);
+
+    uint32_t* r0 = (uint32_t*)(p);
+    uint32_t* r1 = (uint32_t*)(p + stride);
+    uint32_t* r2 = (uint32_t*)(p + stride * 2);
+    uint32_t* r3 = (uint32_t*)(p + stride * 3);
+
+    r0[0] = c00; r0[1] = c00; r0[2] = c01; r0[3] = c01;
+    r1[0] = c00; r1[1] = c00; r1[2] = c01; r1[3] = c01;
+    r2[0] = c10; r2[1] = c10; r2[2] = c11; r2[3] = c11;
+    r3[0] = c10; r3[1] = c10; r3[2] = c11; r3[3] = c11;
 }
 
 static void DrawBlockV4(CinepakDecoder* dec, int x, int y,
