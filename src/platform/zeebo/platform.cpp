@@ -125,8 +125,9 @@ BOOL plat_file_write(const char* path, const void* data, size_t size)
 
 size_t plat_readable_bytes(const void* p)
 {
-    // BREW/ARM flat memory map has no VirtualQuery; return a safe bound when non-null.
-    return p ? 4096u : 0u;
+    // BREW/ARM flat memory map has no VirtualQuery; module code+data starts at 0x00010000.
+    // Returning 4096 here previously clamped 256x256 8bpp TIMs to 16 rows (256x16)!
+    return ((uintptr_t)p >= 0x00010000u) ? (size_t)0x04000000u : 0u;
 }
 
 void* plat_file_read_all(const char* path, size_t* outSize)

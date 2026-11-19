@@ -39,6 +39,7 @@
 #define GLES1_TEXTURE_WRAP_S          0x2802
 #define GLES1_TEXTURE_WRAP_T          0x2803
 #define GLES1_CLAMP_TO_EDGE           0x812F
+#define GLES1_REPEAT                  0x2901
 
 #define GLES1_MODELVIEW               0x1700
 #define GLES1_PROJECTION              0x1701

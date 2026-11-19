@@ -109,7 +109,7 @@ namespace {
 MarniDX* s_instance = NULL;
 
 struct Gles1Vertex {
-    float x, y, z;
+    float x, y, z, w;
     float u, v;
     float r, g, b, a;
 };
@@ -235,12 +235,12 @@ struct MarniDX::Impl {
         }
     }
 
-    void SubmitTriangles(const Gles1Vertex* v, int vertCount) {
+    void SubmitTriangles(const Gles1Vertex* v, int vertCount, int posComponents = 3) {
         glEnableClientState(GLES1_VERTEX_ARRAY);
         glEnableClientState(GLES1_TEXTURE_COORD_ARRAY);
         glEnableClientState(GLES1_COLOR_ARRAY);
 
-        glVertexPointer(3, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].x);
+        glVertexPointer(posComponents, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].x);
         glTexCoordPointer(2, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].u);
         glColorPointer(4, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].r);
 
@@ -249,6 +249,21 @@ struct MarniDX::Impl {
         glDisableClientState(GLES1_COLOR_ARRAY);
         glDisableClientState(GLES1_TEXTURE_COORD_ARRAY);
         glDisableClientState(GLES1_VERTEX_ARRAY);
+    }
+
+    void SetOrthoProjection() {
+        glMatrixMode(GLES1_PROJECTION);
+        glLoadIdentity();
+        glOrthof(0.0f, (float)viewW, (float)viewH, 0.0f, 1.0f, -1.0f);
+        glMatrixMode(GLES1_MODELVIEW);
+        glLoadIdentity();
+    }
+
+    void SetIdentityProjection() {
+        glMatrixMode(GLES1_PROJECTION);
+        glLoadIdentity();
+        glMatrixMode(GLES1_MODELVIEW);
+        glLoadIdentity();
     }
 
     void ReleaseSlot(MarniHandle h) {
@@ -421,7 +436,8 @@ void MarniDX::Clear(float r, float g, float b, float a)
     glViewport(m_pImpl->viewX, m_pImpl->viewY, m_pImpl->viewW, m_pImpl->viewH);
     glMatrixMode(GLES1_PROJECTION);
     glLoadIdentity();
-    glOrthof(0.0f, (float)m_pImpl->viewW, (float)m_pImpl->viewH, 0.0f, -1.0f, 1.0f);
+    // zNear=1, zFar=-1 maps input z in [0,1] positively so smaller z is closer (GL_LEQUAL).
+    glOrthof(0.0f, (float)m_pImpl->viewW, (float)m_pImpl->viewH, 0.0f, 1.0f, -1.0f);
     glMatrixMode(GLES1_MODELVIEW);
     glLoadIdentity();
 
@@ -473,8 +489,8 @@ MarniHandle MarniDX::CreateTexture(int width, int height, int bpp, const void* p
     if (glTex == 0) return MARNI_NULL_HANDLE;
 
     glBindTexture(GLES1_TEXTURE_2D, glTex);
-    glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_WRAP_S, GLES1_CLAMP_TO_EDGE);
-    glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_WRAP_T, GLES1_CLAMP_TO_EDGE);
+    glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_WRAP_S, GLES1_REPEAT);
+    glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_WRAP_T, GLES1_REPEAT);
     glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_MIN_FILTER, GLES1_NEAREST);
     glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_MAG_FILTER, GLES1_NEAREST);
 
@@ -565,12 +581,12 @@ void MarniDX::DrawSprite(float x, float y, float w, float h,
     UnpackColor(color, &r, &g, &b, &a);
 
     Gles1Vertex q[6] = {
-        { x,     y,     0.0f, u0, v0, r, g, b, a },
-        { x + w, y,     0.0f, u1, v0, r, g, b, a },
-        { x,     y + h, 0.0f, u0, v1, r, g, b, a },
-        { x + w, y,     0.0f, u1, v0, r, g, b, a },
-        { x + w, y + h, 0.0f, u1, v1, r, g, b, a },
-        { x,     y + h, 0.0f, u0, v1, r, g, b, a },
+        { x,     y,     0.0f, 1.0f, u0, v0, r, g, b, a },
+        { x + w, y,     0.0f, 1.0f, u1, v0, r, g, b, a },
+        { x,     y + h, 0.0f, 1.0f, u0, v1, r, g, b, a },
+        { x + w, y,     0.0f, 1.0f, u1, v0, r, g, b, a },
+        { x + w, y + h, 0.0f, 1.0f, u1, v1, r, g, b, a },
+        { x,     y + h, 0.0f, 1.0f, u0, v1, r, g, b, a },
     };
 
     glDisable(GLES1_DEPTH_TEST);
@@ -600,12 +616,12 @@ void MarniDX::DrawLine(float x0, float y0, float x1, float y1,
     UnpackColor(color, &r, &g, &b, &a);
 
     Gles1Vertex q[6] = {
-        { x0 - nx, y0 - ny, 0.0f, 0.0f, 0.0f, r, g, b, a },
-        { x1 - nx, y1 - ny, 0.0f, 1.0f, 0.0f, r, g, b, a },
-        { x0 + nx, y0 + ny, 0.0f, 0.0f, 1.0f, r, g, b, a },
-        { x1 - nx, y1 - ny, 0.0f, 1.0f, 0.0f, r, g, b, a },
-        { x1 + nx, y1 + ny, 0.0f, 1.0f, 1.0f, r, g, b, a },
-        { x0 + nx, y0 + ny, 0.0f, 0.0f, 1.0f, r, g, b, a },
+        { x0 - nx, y0 - ny, 0.0f, 1.0f, 0.0f, 0.0f, r, g, b, a },
+        { x1 - nx, y1 - ny, 0.0f, 1.0f, 1.0f, 0.0f, r, g, b, a },
+        { x0 + nx, y0 + ny, 0.0f, 1.0f, 0.0f, 1.0f, r, g, b, a },
+        { x1 - nx, y1 - ny, 0.0f, 1.0f, 1.0f, 0.0f, r, g, b, a },
+        { x1 + nx, y1 + ny, 0.0f, 1.0f, 1.0f, 1.0f, r, g, b, a },
+        { x0 + nx, y0 + ny, 0.0f, 1.0f, 0.0f, 1.0f, r, g, b, a },
     };
 
     glDisable(GLES1_DEPTH_TEST);
@@ -622,12 +638,12 @@ void MarniDX::DrawTriangles(const float* verts, int triCount, MarniHandle tex,
     int count = triCount * 3;
     for (int i = 0; i < count; ++i) {
         const float* v = verts + i * 8;
-        s_scratchVerts[i] = { v[0], v[1], 0.0f, v[2], v[3], v[4], v[5], v[6], v[7] };
+        s_scratchVerts[i] = { v[0], v[1], 0.0f, 1.0f, v[2], v[3], v[4], v[5], v[6], v[7] };
     }
 
     glDisable(GLES1_DEPTH_TEST);
     m_pImpl->ApplyBlendAndSampler(tex, sampler, blend);
-    m_pImpl->SubmitTriangles(s_scratchVerts, count);
+    m_pImpl->SubmitTriangles(s_scratchVerts, count, 3);
 }
 
 void MarniDX::DrawTrianglesPersp(const float* verts, int triCount, MarniHandle tex,
@@ -637,9 +653,15 @@ void MarniDX::DrawTrianglesPersp(const float* verts, int triCount, MarniHandle t
     if (triCount > 1024) triCount = 1024;
 
     int count = triCount * 3;
+    float invW = 2.0f / (float)m_pImpl->viewW;
+    float invH = 2.0f / (float)m_pImpl->viewH;
     for (int i = 0; i < count; ++i) {
         const float* v = verts + i * 10;
-        s_scratchVerts[i] = { v[0], v[1], v[2], v[4], v[5], v[6], v[7], v[8], v[9] };
+        float w = (v[3] > 0.001f) ? v[3] : 1.0f;
+        float ndcX = v[0] * invW - 1.0f;
+        float ndcY = 1.0f - v[1] * invH;
+        float ndcZ = v[2] * 2.0f - 1.0f;
+        s_scratchVerts[i] = { ndcX * w, ndcY * w, ndcZ * w, w, v[4], v[5], v[6], v[7], v[8], v[9] };
     }
 
     if (depthTest) {
@@ -650,8 +672,10 @@ void MarniDX::DrawTrianglesPersp(const float* verts, int triCount, MarniHandle t
         glDisable(GLES1_DEPTH_TEST);
     }
 
+    m_pImpl->SetIdentityProjection();
     m_pImpl->ApplyBlendAndSampler(tex, sampler, blend);
-    m_pImpl->SubmitTriangles(s_scratchVerts, count);
+    m_pImpl->SubmitTriangles(s_scratchVerts, count, 4);
+    m_pImpl->SetOrthoProjection();
     glDisable(GLES1_DEPTH_TEST);
     glDepthMask(GLES1_TRUE);
 }
@@ -663,22 +687,32 @@ void MarniDX::DrawTriangles3D(const float* verts, int triCount, MarniHandle tex,
     static int s_3dLog = 0;
     if (s_3dLog < 5) {
         ++s_3dLog;
-        Zeebo_Log("[3D] DrawTriangles3D tris=%d tex=%u\n", triCount, (unsigned)tex);
+        Zeebo_Log("[3D] DrawTriangles3D tris=%d tex=%u v0=(%.1f,%.1f,%.3f,w=%.1f) uv=(%.3f,%.3f) col=(%.2f,%.2f,%.2f,%.2f)\n",
+                  triCount, (unsigned)tex, verts[0], verts[1], verts[2], verts[3],
+                  verts[4], verts[5], verts[6], verts[7], verts[8], verts[9]);
     }
     if (triCount > 1024) triCount = 1024;
 
     int count = triCount * 3;
+    float invW = 2.0f / (float)m_pImpl->viewW;
+    float invH = 2.0f / (float)m_pImpl->viewH;
     for (int i = 0; i < count; ++i) {
         const float* v = verts + i * 10;
-        s_scratchVerts[i] = { v[0], v[1], v[2], v[4], v[5], v[6], v[7], v[8], v[9] };
+        float w = (v[3] > 0.001f) ? v[3] : 1.0f;
+        float ndcX = v[0] * invW - 1.0f;
+        float ndcY = 1.0f - v[1] * invH;
+        float ndcZ = v[2] * 2.0f - 1.0f;
+        s_scratchVerts[i] = { ndcX * w, ndcY * w, ndcZ * w, w, v[4], v[5], v[6], v[7], v[8], v[9] };
     }
 
     glEnable(GLES1_DEPTH_TEST);
     glDepthFunc(GLES1_LEQUAL);
     glDepthMask(depthWrite ? GLES1_TRUE : GLES1_FALSE);
 
+    m_pImpl->SetIdentityProjection();
     m_pImpl->ApplyBlendAndSampler(tex, sampler, blend);
-    m_pImpl->SubmitTriangles(s_scratchVerts, count);
+    m_pImpl->SubmitTriangles(s_scratchVerts, count, 4);
+    m_pImpl->SetOrthoProjection();
 
     glDisable(GLES1_DEPTH_TEST);
     glDepthMask(GLES1_TRUE);
