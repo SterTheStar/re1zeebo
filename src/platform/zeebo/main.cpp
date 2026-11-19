@@ -68,7 +68,7 @@ static BOOL TickStartupSplash(void)
     if (!s_splashActive) return FALSE;
 
     DWORD elapsed = plat_time_ms() - s_splashStartMs;
-    if (elapsed >= 3200u) {
+    if (elapsed >= 4200u) {
         FreeStartupSplash();
         return FALSE;
     }
@@ -80,11 +80,11 @@ static BOOL TickStartupSplash(void)
     }
 
     uint32_t alpha = 255u;
-    if (elapsed < 350u) {
-        alpha = (elapsed * 255u) / 350u;
-    } else if (elapsed > 2750u) {
-        DWORD rem = 3200u - elapsed;
-        alpha = (rem * 255u) / 450u;
+    if (elapsed < 400u) {
+        alpha = (elapsed * 255u) / 400u;
+    } else if (elapsed > 3700u) {
+        DWORD rem = 4200u - elapsed;
+        alpha = (rem * 255u) / 500u;
     }
     if (alpha > 255u) alpha = 255u;
 
