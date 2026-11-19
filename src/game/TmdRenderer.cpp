@@ -814,54 +814,110 @@ void FlushTmdObjects(void)
         // wash first, opaque over the top, punched texels keeping the wash. The
         // collection index is the last resort, so the whole order is
         // deterministic frame to frame.
-        std::sort(g_tmdTriOrder, g_tmdTriOrder + collected, [](int a, int b) {
-            const TmdTri& ta = g_tmdTris[a];
-            const TmdTri& tb = g_tmdTris[b];
-            if (ta.depth != tb.depth)     return ta.depth > tb.depth;
-            if (ta.otDepth != tb.otDepth) return ta.otDepth > tb.otDepth;
-            return a < b;
-        });
-
         static float triVerts[TMD_MAX_TRIS_FLUSH * TMD_TRI_FLOATS];
-        int   triCount = 0;
-        DWORD triTex   = 0;
-        bool  triWrite = true;   // depth-WRITE mode of the batch in flight
 
+        bool hasTranslucent = false;
         for (int k = 0; k < collected; k++) {
-            const TmdTri* t3 = &g_tmdTris[g_tmdTriOrder[k]];
-            const bool triWriteThis = t3->alpha >= 0.999f;
+            if (g_tmdTris[k].alpha < 0.999f) {
+                hasTranslucent = true;
+                break;
+            }
+        }
 
-            // Every scene sprite farther than this triangle has to be on
-            // screen before it. The batch in flight is behind them too, so it
-            // goes down first.
-            while (maskIdx < maskCount && (float)maskDepths[maskIdx] > t3->depth) {
-                if (triCount > 0) {
+        if (!hasTranslucent) {
+            // Fast path: depth buffer resolves all opaque triangles, so skip
+            // per-triangle depth sort and batch by (maskBucket, tex).
+            static uint8_t triBucket[TMD_MAX_TRIS_COLLECT];
+            static uint8_t triEmitted[TMD_MAX_TRIS_COLLECT];
+            if (maskCount == 0) {
+                memset(triBucket, 0, (size_t)collected);
+            } else {
+                for (int k = 0; k < collected; k++) {
+                    float d = g_tmdTris[k].depth;
+                    int b = 0;
+                    while (b < maskCount && (float)maskDepths[b] > d) {
+                        b++;
+                    }
+                    triBucket[k] = (uint8_t)b;
+                }
+            }
+            memset(triEmitted, 0, (size_t)collected);
+
+            for (int b = 0; b <= maskCount; b++) {
+                if (b > 0) {
+                    FlushSpriteCommandsRange(maskDepths[b - 1], maskCursor, SPRITE_CLASS_SCENE);
+                    maskCursor = maskDepths[b - 1];
+                    maskIdx = b;
+                }
+                for (int k = 0; k < collected; k++) {
+                    if (triEmitted[k] || triBucket[k] != (uint8_t)b) continue;
+                    DWORD curTex = g_tmdTris[k].tex;
+                    int triCount = 0;
+                    for (int j = k; j < collected; j++) {
+                        if (triEmitted[j] || triBucket[j] != (uint8_t)b || g_tmdTris[j].tex != curTex) {
+                            continue;
+                        }
+                        triEmitted[j] = 1;
+                        memcpy(triVerts + triCount * TMD_TRI_FLOATS, g_tmdTris[j].v, sizeof(g_tmdTris[j].v));
+                        triCount++;
+                        if (triCount >= TMD_MAX_TRIS_FLUSH) {
+                            Marni_DX()->DrawTriangles3D(triVerts, triCount, (MarniHandle)curTex,
+                                                        MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, true);
+                            triCount = 0;
+                        }
+                    }
+                    if (triCount > 0) {
+                        Marni_DX()->DrawTriangles3D(triVerts, triCount, (MarniHandle)curTex,
+                                                    MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, true);
+                    }
+                }
+            }
+        } else {
+            std::sort(g_tmdTriOrder, g_tmdTriOrder + collected, [](int a, int b) {
+                const TmdTri& ta = g_tmdTris[a];
+                const TmdTri& tb = g_tmdTris[b];
+                if (ta.depth != tb.depth)     return ta.depth > tb.depth;
+                if (ta.otDepth != tb.otDepth) return ta.otDepth > tb.otDepth;
+                return a < b;
+            });
+
+            int   triCount = 0;
+            DWORD triTex   = 0;
+            bool  triWrite = true;   // depth-WRITE mode of the batch in flight
+
+            for (int k = 0; k < collected; k++) {
+                const TmdTri* t3 = &g_tmdTris[g_tmdTriOrder[k]];
+                const bool triWriteThis = t3->alpha >= 0.999f;
+
+                while (maskIdx < maskCount && (float)maskDepths[maskIdx] > t3->depth) {
+                    if (triCount > 0) {
+                        Marni_DX()->DrawTriangles3D(triVerts, triCount, (MarniHandle)triTex,
+                                                    MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA,
+                                                    triWrite);
+                        triCount = 0;
+                    }
+                    FlushSpriteCommandsRange(maskDepths[maskIdx], maskCursor, SPRITE_CLASS_SCENE);
+                    maskCursor = maskDepths[maskIdx];
+                    maskIdx++;
+                }
+
+                if ((triCount > 0 && (t3->tex != triTex || triWriteThis != triWrite)) ||
+                    triCount >= TMD_MAX_TRIS_FLUSH) {
                     Marni_DX()->DrawTriangles3D(triVerts, triCount, (MarniHandle)triTex,
                                                 MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA,
                                                 triWrite);
                     triCount = 0;
                 }
-                FlushSpriteCommandsRange(maskDepths[maskIdx], maskCursor, SPRITE_CLASS_SCENE);
-                maskCursor = maskDepths[maskIdx];
-                maskIdx++;
+                triTex = t3->tex;
+                triWrite = triWriteThis;
+                memcpy(triVerts + triCount * TMD_TRI_FLOATS, t3->v, sizeof(t3->v));
+                triCount++;
             }
-
-            if ((triCount > 0 && (t3->tex != triTex || triWriteThis != triWrite)) ||
-                triCount >= TMD_MAX_TRIS_FLUSH) {
+            if (triCount > 0) {
                 Marni_DX()->DrawTriangles3D(triVerts, triCount, (MarniHandle)triTex,
                                             MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA,
                                             triWrite);
-                triCount = 0;
             }
-            triTex = t3->tex;
-            triWrite = triWriteThis;
-            memcpy(triVerts + triCount * TMD_TRI_FLOATS, t3->v, sizeof(t3->v));
-            triCount++;
-        }
-        if (triCount > 0) {
-            Marni_DX()->DrawTriangles3D(triVerts, triCount, (MarniHandle)triTex,
-                                        MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA,
-                                        triWrite);
         }
     }
 
