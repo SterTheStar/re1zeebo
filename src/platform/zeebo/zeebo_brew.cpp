@@ -198,15 +198,30 @@ static void RunCppGlobalConstructors(void)
     }
 }
 
+static AEEHelperFuncs* ResolveHelpers(void* ph)
+{
+    if (ph) {
+        return (AEEHelperFuncs*)ph;
+    }
+    uintptr_t addr = ((uintptr_t)&AEEMod_Load) & ~(uintptr_t)3u;
+    for (int i = 0; i < 256; ++i) {
+        const uint32_t* p = (const uint32_t*)(addr - (uintptr_t)(i * 4));
+        if (p[2] == 0x57455242u /* "BREW" */) {
+            return *(AEEHelperFuncs* const*)(p - 1);
+        }
+    }
+    return *(((AEEHelperFuncs* const*)(uintptr_t)&AEEMod_Load) - 1);
+}
+
 extern "C" __attribute__((section(".text.entry")))
 int AEEMod_Load(IShell* ps, void* ph, IModule** ppMod)
 {
-    if (!ps || !ph || !ppMod) {
+    if (!ps || !ppMod) {
         return EBADPARM;
     }
 
-    AEEHelperFuncs* helpers = (AEEHelperFuncs*)ph;
-    if (!helpers->pfnMalloc) {
+    AEEHelperFuncs* helpers = ResolveHelpers(ph);
+    if (!helpers || !helpers->pfnMalloc) {
         return EFAILED;
     }
 
