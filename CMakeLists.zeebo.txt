@@ -160,19 +160,37 @@ target_compile_options(re1zeebo.elf PRIVATE
     -fno-exceptions
     -fno-rtti
     -fno-threadsafe-statics
+    -mword-relocations
     $<$<COMPILE_LANGUAGE:CXX>:-include>
     $<$<COMPILE_LANGUAGE:CXX>:algorithm>
 )
 
-target_link_options(re1zeebo.elf PRIVATE
-    -T${CMAKE_CURRENT_SOURCE_DIR}/tools/zeebo/zeebo_mod.ld
-    -nostartfiles
-    -Wl,--gc-sections
+find_program(ZEEBO_ELF2MOD elf2mod
+    PATHS "C:/Users/Esther/AppData/Local/Programs/brew-sdk/toolset/Toolset 7.10 Rev 12.0.1549664/bin"
 )
 
-if(ZEEBO_OBJCOPY)
-    add_custom_command(TARGET re1zeebo.elf POST_BUILD
-        COMMAND ${ZEEBO_OBJCOPY} -O binary $<TARGET_FILE:re1zeebo.elf> ${CMAKE_CURRENT_BINARY_DIR}/re1zeebo.mod
-        COMMENT "Generating BREW flat binary re1zeebo.mod"
+if(ZEEBO_ELF2MOD)
+    target_link_options(re1zeebo.elf PRIVATE
+        -T${CMAKE_CURRENT_SOURCE_DIR}/tools/zeebo/elf2mod.x
+        -nostartfiles
+        -Wl,--entry=AEEMod_Load
+        -Wl,--emit-relocs
+        -Wl,--gc-sections
     )
+    add_custom_command(TARGET re1zeebo.elf POST_BUILD
+        COMMAND "${ZEEBO_ELF2MOD}" -output ${CMAKE_CURRENT_BINARY_DIR}/re1zeebo.mod $<TARGET_FILE:re1zeebo.elf>
+        COMMENT "Generating relocatable BREW module re1zeebo.mod via elf2mod"
+    )
+else()
+    target_link_options(re1zeebo.elf PRIVATE
+        -T${CMAKE_CURRENT_SOURCE_DIR}/tools/zeebo/zeebo_mod.ld
+        -nostartfiles
+        -Wl,--gc-sections
+    )
+    if(ZEEBO_OBJCOPY)
+        add_custom_command(TARGET re1zeebo.elf POST_BUILD
+            COMMAND ${ZEEBO_OBJCOPY} -O binary $<TARGET_FILE:re1zeebo.elf> ${CMAKE_CURRENT_BINARY_DIR}/re1zeebo.mod
+            COMMENT "Generating BREW flat binary re1zeebo.mod"
+        )
+    endif()
 endif()
