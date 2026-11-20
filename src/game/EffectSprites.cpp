@@ -597,10 +597,9 @@ static void load_effect_sprites(void)
 
     // Composite each declared room sprite into its page buffer (CLUT row 0 -
     // the base palette, uploaded to SRV 11-14 as before).
-    static DWORD s_pageBuffer[4][256 * 256];
-    for (int i = 0; i < 4; i++) {
-        memset(s_pageBuffer[i], 0, sizeof(s_pageBuffer[i]));
-    }
+    typedef DWORD EffectPageRow[256 * 256];
+    EffectPageRow* s_pageBuffer = (EffectPageRow*)calloc(4, sizeof(EffectPageRow));
+    if (!s_pageBuffer) return;
     for (unsigned int slot = 0; slot < 8; slot++) {
         unsigned char type = g_abEffSpriteIndexTable[8 + slot];
         if (type == 0xFF) continue;
@@ -618,12 +617,13 @@ static void load_effect_sprites(void)
 
     // Port-only: each page's Effspr file as the game would draw it, the HD
     // reference for the uploads below (see render_effspr_page).
-    static DWORD s_pageFile[4][256 * 256];
+    EffectPageRow* s_pageFile = NULL;
     char hdKey[4][160];
     bool hdFile[4] = { false, false, false, false };
     if (HdTextures_Active()) {
+        s_pageFile = (EffectPageRow*)calloc(4, sizeof(EffectPageRow));
         const unsigned char* entry = room_effect_page_entry();
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 4 && s_pageFile; i++) {
             char path[256];
             hdKey[i][0] = '\0';
             if (entry[i] == 0xFF || !render_effspr_page(entry[i], s_pageFile[i], path, sizeof(path)))
@@ -641,8 +641,8 @@ static void load_effect_sprites(void)
             if (s_pageBuffer[i][px] != 0) { hasContent = true; break; }
         }
         if (hasContent) {
-            const bool named = hdFile[i] && effspr_page_within_file(s_pageBuffer[i], s_pageFile[i]);
-            HdPageScope hdSource(named ? hdKey[i] : NULL, 256, 256, s_pageFile[i]);
+            const bool named = s_pageFile && hdFile[i] && effspr_page_within_file(s_pageBuffer[i], s_pageFile[i]);
+            HdPageScope hdSource(named ? hdKey[i] : NULL, 256, 256, s_pageFile ? s_pageFile[i] : NULL);
             MarniCreateTexture(256, 256, 32, s_pageBuffer[i], &g_TexturePageSRV[slot]);
             g_TexturePageWidth[slot] = 256;
             g_TexturePageHeight[slot] = 256;
@@ -681,9 +681,9 @@ static void load_effect_sprites(void)
             }
             if (hasContent) {
                 int slot = 152 + i * 4 + (int)row - 1;
-                const bool named = hdFile[i] &&
+                const bool named = s_pageFile && hdFile[i] &&
                                    effspr_page_within_file(s_pageBuffer[i], s_pageFile[i]);
-                HdPageScope hdSource(named ? hdKey[i] : NULL, 256, 256, s_pageFile[i]);
+                HdPageScope hdSource(named ? hdKey[i] : NULL, 256, 256, s_pageFile ? s_pageFile[i] : NULL);
                 MarniCreateTexture(256, 256, 32, s_pageBuffer[i], &g_TexturePageSRV[slot]);
                 g_TexturePageWidth[slot] = 256;
                 g_TexturePageHeight[slot] = 256;
@@ -691,6 +691,9 @@ static void load_effect_sprites(void)
             }
         }
     }
+
+    free(s_pageFile);
+    free(s_pageBuffer);
 
     // The weapon-FX sheets 4-7 (blood, ember, glass, 0xb) live on the page-1
     // Effspr file, which is a per-room palette variant (esp001 base / esp2xx).

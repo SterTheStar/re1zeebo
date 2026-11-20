@@ -51,6 +51,7 @@ typedef uint8_t  boolean;
 #define AEECLSID_EGL             0x01014BC4u
 #define AEECLSID_GL              0x01014BC3u
 #define AEECLSID_GLES11          0x0103D8EBu
+#define AEEIID_IDIB              0x01001045u
 
 // Application Class ID for Resident Evil 1 Zeebo port (custom homebrew range)
 #define AEECLSID_RE1_ZEEBO       0x01099001u
@@ -99,6 +100,8 @@ typedef struct IApplet   IApplet;
 typedef struct IFileMgr  IFileMgr;
 typedef struct IFile     IFile;
 typedef struct IDisplay  IDisplay;
+typedef struct IBitmap   IBitmap;
+typedef struct IDIB      IDIB;
 typedef struct IEGL      IEGL;
 typedef struct IGL       IGL;
 typedef struct IHID      IHID;
@@ -281,6 +284,30 @@ struct IFile {
 };
 
 // ---------------------------------------------------------------------------
+// IDisplay / IBitmap (for BREW 4.0.2 NativeWindowType = IDIB* in eglCreateWindowSurface)
+// ---------------------------------------------------------------------------
+typedef struct IBitmapVtbl {
+    uint32_t (*AddRef)(IBitmap* po);
+    uint32_t (*Release)(IBitmap* po);
+    int      (*QueryInterface)(IBitmap* po, AEEIID id, void** ppNew);
+} IBitmapVtbl;
+
+struct IBitmap {
+    const IBitmapVtbl* pvt;
+};
+
+typedef struct IDisplayVtbl {
+    uint32_t (*AddRef)(IDisplay* po);
+    uint32_t (*Release)(IDisplay* po);
+    void*    reserved_2_15[14];
+    int      (*GetDeviceBitmap)(IDisplay* po, IBitmap** ppIBitmap);
+} IDisplayVtbl;
+
+struct IDisplay {
+    const IDisplayVtbl* pvt;
+};
+
+// ---------------------------------------------------------------------------
 // IEGL & IGL (Legacy BREW GL/EGL interface where methods omit `this`!)
 // ---------------------------------------------------------------------------
 typedef void* AEEEGLDisplay;
@@ -456,6 +483,24 @@ typedef struct ZeeboRuntime {
 } ZeeboRuntime;
 
 extern ZeeboRuntime g_Zeebo;
+
+static inline void* Zeebo_GetNativeWindow(void)
+{
+    if (!g_Zeebo.pDisplay || !g_Zeebo.pDisplay->pvt || !g_Zeebo.pDisplay->pvt->GetDeviceBitmap) {
+        return NULL;
+    }
+    IBitmap* pDevBmp = NULL;
+    if (g_Zeebo.pDisplay->pvt->GetDeviceBitmap(g_Zeebo.pDisplay, &pDevBmp) != AEE_SUCCESS || !pDevBmp) {
+        return NULL;
+    }
+    IDIB* pDIB = NULL;
+    if (pDevBmp->pvt && pDevBmp->pvt->QueryInterface) {
+        if (pDevBmp->pvt->QueryInterface(pDevBmp, AEEIID_IDIB, (void**)&pDIB) == AEE_SUCCESS && pDIB) {
+            return (void*)pDIB;
+        }
+    }
+    return (void*)pDevBmp;
+}
 
 // Entry point called by BREW / zeebx-emu loader
 int AEEMod_Load(IShell* ps, void* ph, IModule** ppMod);

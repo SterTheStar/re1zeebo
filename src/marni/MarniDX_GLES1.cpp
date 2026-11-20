@@ -379,7 +379,7 @@ BOOL MarniDX::Create(HWND hWnd, int width, int height, BOOL fullScreen,
 
     if (g_Zeebo.pEGL && g_Zeebo.pEGL->pvt) {
         const IEGLVtbl* egl = g_Zeebo.pEGL->pvt;
-        m_pImpl->display = egl->eglGetDisplay(ZEEBO_EGL_DEFAULT_DISPLAY);
+        m_pImpl->display = egl->eglGetDisplay(g_Zeebo.pDisplay ? (int)(uintptr_t)g_Zeebo.pDisplay : ZEEBO_EGL_DEFAULT_DISPLAY);
         egl->eglInitialize(m_pImpl->display, NULL, NULL);
 
         const AEEEGLint attribs[] = {
@@ -393,6 +393,12 @@ BOOL MarniDX::Create(HWND hWnd, int width, int height, BOOL fullScreen,
         AEEEGLint numCfg = 0;
         egl->eglChooseConfig(m_pImpl->display, attribs, &cfg, 1, &numCfg);
         m_pImpl->surface = egl->eglCreateWindowSurface(m_pImpl->display, cfg, NULL, NULL);
+        if (!m_pImpl->surface) {
+            void* nativeWin = Zeebo_GetNativeWindow();
+            if (nativeWin) {
+                m_pImpl->surface = egl->eglCreateWindowSurface(m_pImpl->display, cfg, nativeWin, NULL);
+            }
+        }
         m_pImpl->context = egl->eglCreateContext(m_pImpl->display, cfg, ZEEBO_EGL_NO_CONTEXT, NULL);
         egl->eglMakeCurrent(m_pImpl->display, m_pImpl->surface, m_pImpl->surface, m_pImpl->context);
     }

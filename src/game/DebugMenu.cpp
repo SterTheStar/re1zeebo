@@ -706,8 +706,8 @@ void DebugRoomChange_ApplyPendingPlacement(void)
                     hexDigits[nRoom >> 4],
                     hexDigits[nRoom & 0xF]);
 
-            static unsigned char s_neighbourRdt[768 * 1024];   // largest shipped RDT is ~630KB
-            size_t size = LoadFile(path, s_neighbourRdt, 1);
+            unsigned char* s_neighbourRdt = (unsigned char*)malloc(768 * 1024);   // largest shipped RDT is ~630KB
+            size_t size = s_neighbourRdt ? LoadFile(path, s_neighbourRdt, 1) : 0;
             if (size > 0x94 + 0x100) {
                 unsigned int init = *(unsigned int*)(s_neighbourRdt + 0x60);
                 if (init > 0x94 && init < size - 4) {
@@ -758,6 +758,7 @@ void DebugRoomChange_ApplyPendingPlacement(void)
                     }
                 }
             }
+            free(s_neighbourRdt);
         }
 
         // Fallback: the dir heuristic (edge of this room's own zone). Verified
