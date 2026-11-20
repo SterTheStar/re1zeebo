@@ -168,11 +168,15 @@ extern "C" boolean Zeebo_OnAppStart(void)
     g_bFullScreen    = TRUE;
     g_bQuitFlag      = FALSE;
 
+    crashlog_mark("ConfigFile_Load");
     ConfigFile_Load();
 
+    crashlog_mark("StartSoundSystemAsync");
     StartSoundSystemAsync(NULL);
+    crashlog_mark("TaskScheduler_Init");
     TaskScheduler_Init();
 
+    crashlog_mark("InitializeMarniSystem");
     InitializeMarniSystem();
     if (!Marni_DX() || !Marni_DX()->IsReady()) {
         plat_fatal("Failed to initialize Marni system on Zeebo.");
@@ -184,8 +188,10 @@ extern "C" boolean Zeebo_OnAppStart(void)
     g_bQuitFlag      = FALSE;
     g_dwGameTimer1   = plat_time_ms();
 
+    crashlog_mark("InitStartupSplash");
     InitStartupSplash();
 
+    crashlog_mark("Zeebo_OnAppStart done");
     return TRUE;
 }
 

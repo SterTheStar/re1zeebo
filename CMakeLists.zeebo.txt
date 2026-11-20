@@ -6,6 +6,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(residentevil_zeebo C CXX ASM)
 
+option(ZEEBO_SIM "Build x86 DLL for Qualcomm BREW Simulator" OFF)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -137,60 +139,88 @@ set(RE1_ZEEBO_PLATFORM_SOURCES
     src/platform/zeebo/stubs.cpp
 )
 
-add_executable(re1zeebo.elf
-    ${RE1_SHARED_SOURCES}
-    ${RE1_ZEEBO_PLATFORM_SOURCES}
-)
+if(ZEEBO_SIM)
+    list(REMOVE_ITEM RE1_SHARED_SOURCES src/game/TaskScheduler_arm.S)
+    list(REMOVE_ITEM RE1_ZEEBO_PLATFORM_SOURCES src/platform/zeebo/syscalls.cpp)
 
-target_include_directories(re1zeebo.elf PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-
-target_compile_definitions(re1zeebo.elf PRIVATE
-    __ZEEBO__=1
-    RE1_NO_HD_TEXTURES=1
-)
-
-target_compile_options(re1zeebo.elf PRIVATE
-    -O2
-    -w
-    -fsigned-char
-    -fno-strict-aliasing
-    -fno-strict-overflow
-    -fno-exceptions
-    -fno-rtti
-    -fno-threadsafe-statics
-    -mword-relocations
-    $<$<COMPILE_LANGUAGE:CXX>:-include>
-    $<$<COMPILE_LANGUAGE:CXX>:algorithm>
-)
-
-find_program(ZEEBO_ELF2MOD elf2mod
-    PATHS "C:/Users/Esther/AppData/Local/Programs/brew-sdk/toolset/Toolset 7.10 Rev 12.0.1549664/bin"
-)
-
-if(ZEEBO_ELF2MOD)
-    target_link_options(re1zeebo.elf PRIVATE
-        -T${CMAKE_CURRENT_SOURCE_DIR}/tools/zeebo/elf2mod.x
-        -nostartfiles
-        -Wl,--entry=AEEMod_Load
-        -Wl,--emit-relocs
-        -Wl,--gc-sections
+    add_library(re1zeebo SHARED
+        ${RE1_SHARED_SOURCES}
+        ${RE1_ZEEBO_PLATFORM_SOURCES}
     )
-    add_custom_command(TARGET re1zeebo.elf POST_BUILD
-        COMMAND "${ZEEBO_ELF2MOD}" -output ${CMAKE_CURRENT_BINARY_DIR}/re1zeebo.mod $<TARGET_FILE:re1zeebo.elf>
-        COMMENT "Generating relocatable BREW module re1zeebo.mod via elf2mod"
+
+    target_include_directories(re1zeebo PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_compile_definitions(re1zeebo PRIVATE
+        __ZEEBO__=1
+        AEE_SIMULATOR=1
+        RE1_NO_HD_TEXTURES=1
+        _CRT_SECURE_NO_WARNINGS=1
+        WIN32_LEAN_AND_MEAN=1
+        NOMINMAX=1
+    )
+
+    target_compile_options(re1zeebo PRIVATE
+        /W0
+        /EHsc
     )
 else()
-    target_link_options(re1zeebo.elf PRIVATE
-        -T${CMAKE_CURRENT_SOURCE_DIR}/tools/zeebo/zeebo_mod.ld
-        -nostartfiles
-        -Wl,--gc-sections
+    add_executable(re1zeebo.elf
+        ${RE1_SHARED_SOURCES}
+        ${RE1_ZEEBO_PLATFORM_SOURCES}
     )
-    if(ZEEBO_OBJCOPY)
-        add_custom_command(TARGET re1zeebo.elf POST_BUILD
-            COMMAND ${ZEEBO_OBJCOPY} -O binary $<TARGET_FILE:re1zeebo.elf> ${CMAKE_CURRENT_BINARY_DIR}/re1zeebo.mod
-            COMMENT "Generating BREW flat binary re1zeebo.mod"
+
+    target_include_directories(re1zeebo.elf PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_compile_definitions(re1zeebo.elf PRIVATE
+        __ZEEBO__=1
+        RE1_NO_HD_TEXTURES=1
+    )
+
+    target_compile_options(re1zeebo.elf PRIVATE
+        -O2
+        -w
+        -fsigned-char
+        -fno-strict-aliasing
+        -fno-strict-overflow
+        -fno-exceptions
+        -fno-rtti
+        -fno-threadsafe-statics
+        -mword-relocations
+        $<$<COMPILE_LANGUAGE:CXX>:-include>
+        $<$<COMPILE_LANGUAGE:CXX>:algorithm>
+    )
+
+    find_program(ZEEBO_ELF2MOD elf2mod
+        PATHS "C:/Users/Esther/AppData/Local/Programs/brew-sdk/toolset/Toolset 7.10 Rev 12.0.1549664/bin"
+    )
+
+    if(ZEEBO_ELF2MOD)
+        target_link_options(re1zeebo.elf PRIVATE
+            -T${CMAKE_CURRENT_SOURCE_DIR}/tools/zeebo/elf2mod.x
+            -nostartfiles
+            -Wl,--entry=AEEMod_Load
+            -Wl,--emit-relocs
+            -Wl,--gc-sections
         )
+        add_custom_command(TARGET re1zeebo.elf POST_BUILD
+            COMMAND "${ZEEBO_ELF2MOD}" -output ${CMAKE_CURRENT_BINARY_DIR}/re1zeebo.mod $<TARGET_FILE:re1zeebo.elf>
+            COMMENT "Generating relocatable BREW module re1zeebo.mod via elf2mod"
+        )
+    else()
+        target_link_options(re1zeebo.elf PRIVATE
+            -T${CMAKE_CURRENT_SOURCE_DIR}/tools/zeebo/zeebo_mod.ld
+            -nostartfiles
+            -Wl,--gc-sections
+        )
+        if(ZEEBO_OBJCOPY)
+            add_custom_command(TARGET re1zeebo.elf POST_BUILD
+                COMMAND ${ZEEBO_OBJCOPY} -O binary $<TARGET_FILE:re1zeebo.elf> ${CMAKE_CURRENT_BINARY_DIR}/re1zeebo.mod
+                COMMENT "Generating BREW flat binary re1zeebo.mod"
+            )
+        endif()
     endif()
 endif()

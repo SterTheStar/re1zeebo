@@ -43,7 +43,7 @@ typedef uint8_t  boolean;
 // ---------------------------------------------------------------------------
 // Standard BREW / Zeebo Class IDs
 // ---------------------------------------------------------------------------
-#define AEECLSID_DISPLAY         0x01001002u
+#define AEECLSID_DISPLAY         0x01001001u
 #define AEECLSID_FILEMGR         0x01001003u
 #define AEECLSID_SOUND           0x01001056u
 #define AEECLSID_MEDIAUTIL       0x0100550Du
@@ -490,12 +490,14 @@ static inline void* Zeebo_GetNativeWindow(void)
         return NULL;
     }
     IBitmap* pDevBmp = NULL;
-    if (g_Zeebo.pDisplay->pvt->GetDeviceBitmap(g_Zeebo.pDisplay, &pDevBmp) != AEE_SUCCESS || !pDevBmp) {
+    int rc1 = g_Zeebo.pDisplay->pvt->GetDeviceBitmap(g_Zeebo.pDisplay, &pDevBmp);
+    if (rc1 != AEE_SUCCESS || !pDevBmp) {
         return NULL;
     }
     IDIB* pDIB = NULL;
     if (pDevBmp->pvt && pDevBmp->pvt->QueryInterface) {
-        if (pDevBmp->pvt->QueryInterface(pDevBmp, AEEIID_IDIB, (void**)&pDIB) == AEE_SUCCESS && pDIB) {
+        int rc2 = pDevBmp->pvt->QueryInterface(pDevBmp, AEEIID_IDIB, (void**)&pDIB);
+        if (rc2 == AEE_SUCCESS && pDIB) {
             return (void*)pDIB;
         }
     }
@@ -503,6 +505,9 @@ static inline void* Zeebo_GetNativeWindow(void)
 }
 
 // Entry point called by BREW / zeebx-emu loader
+#ifdef AEE_SIMULATOR
+__declspec(dllexport)
+#endif
 int AEEMod_Load(IShell* ps, void* ph, IModule** ppMod);
 
 // Frame pump & event callbacks implemented in main.cpp / input.cpp

@@ -19,6 +19,15 @@ extern "C" void Zeebo_Log(const char* fmt, ...)
     if (n <= 0) return;
     buf[n] = '\0';
 
+#ifdef AEE_SIMULATOR
+    FILE* simf = fopen("C:\\Users\\Esther\\AppData\\Local\\Temp\\re1_sim.log", "a");
+    if (simf) {
+        fputs(buf, simf);
+        if (buf[n - 1] != '\n') fputc('\n', simf);
+        fclose(simf);
+    }
+#endif
+
     if (g_Zeebo.pHelpers && g_Zeebo.pHelpers->pfnDbgPrintf) {
         g_Zeebo.pHelpers->pfnDbgPrintf("%s", buf);
     }

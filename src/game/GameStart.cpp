@@ -648,7 +648,9 @@ void InitializeGame(void)
     Zeebo_Log("[GS] after init_room\n");
 
     g_AttractModeIdleTimer = 1;
+    Zeebo_Log("[GS] before update_room_bgm\n");
     update_room_bgm();
+    Zeebo_Log("[GS] after update_room_bgm\n");
 
     // Port: the first-run Jill (no main-hall ribbon) is the PC's alone - see
     // jill_needs_ink_ribbons (Globals.h).
@@ -663,6 +665,7 @@ void InitializeGame(void)
     }
 
     g_AttractModeIdleTimer = 0;
+    Zeebo_Log("[GS] end of game init\n");
     printf("end of game init\n");
 }
 

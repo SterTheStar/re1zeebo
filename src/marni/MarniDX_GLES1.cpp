@@ -379,7 +379,14 @@ BOOL MarniDX::Create(HWND hWnd, int width, int height, BOOL fullScreen,
 
     if (g_Zeebo.pEGL && g_Zeebo.pEGL->pvt) {
         const IEGLVtbl* egl = g_Zeebo.pEGL->pvt;
+        Zeebo_Log("[EGL] egl=%p pvt=%p fnGetDisplay=%p pDisplay=%p\n",
+                  g_Zeebo.pEGL, egl, egl->eglGetDisplay, g_Zeebo.pDisplay);
+#ifdef AEE_SIMULATOR
+        m_pImpl->display = egl->eglGetDisplay(ZEEBO_EGL_DEFAULT_DISPLAY);
+#else
         m_pImpl->display = egl->eglGetDisplay(g_Zeebo.pDisplay ? (int)(uintptr_t)g_Zeebo.pDisplay : ZEEBO_EGL_DEFAULT_DISPLAY);
+#endif
+        Zeebo_Log("[EGL] eglInitialize dpy=%p\n", m_pImpl->display);
         egl->eglInitialize(m_pImpl->display, NULL, NULL);
 
         const AEEEGLint attribs[] = {
@@ -391,16 +398,37 @@ BOOL MarniDX::Create(HWND hWnd, int width, int height, BOOL fullScreen,
         };
         AEEEGLConfig cfg = NULL;
         AEEEGLint numCfg = 0;
+        Zeebo_Log("[EGL] eglChooseConfig\n");
         egl->eglChooseConfig(m_pImpl->display, attribs, &cfg, 1, &numCfg);
-        m_pImpl->surface = egl->eglCreateWindowSurface(m_pImpl->display, cfg, NULL, NULL);
-        if (!m_pImpl->surface) {
-            void* nativeWin = Zeebo_GetNativeWindow();
+        Zeebo_Log("[EGL] cfg=%p numCfg=%d\n", cfg, numCfg);
+
+        const char* vendor = egl->eglQueryString ? egl->eglQueryString(m_pImpl->display, 0x3053 /* EGL_VENDOR */) : NULL;
+        Zeebo_Log("[EGL] vendor=%s\n", vendor ? vendor : "(null)");
+
+        void* nativeWin = NULL;
+#ifdef AEE_SIMULATOR
+        Zeebo_Log("[EGL] calling Zeebo_GetNativeWindow (pDisplay=%p pvt=%p fn=%p)\n",
+                  g_Zeebo.pDisplay, g_Zeebo.pDisplay ? g_Zeebo.pDisplay->pvt : NULL,
+                  (g_Zeebo.pDisplay && g_Zeebo.pDisplay->pvt) ? g_Zeebo.pDisplay->pvt->GetDeviceBitmap : NULL);
+        nativeWin = Zeebo_GetNativeWindow();
+#else
+        if (vendor && (strstr(vendor, "QUALCOMM") || strstr(vendor, "Qualcomm") || strstr(vendor, "Adreno"))) {
+            nativeWin = Zeebo_GetNativeWindow();
+        }
+#endif
+        Zeebo_Log("[EGL] eglCreateWindowSurface win=%p\n", nativeWin);
+        m_pImpl->surface = egl->eglCreateWindowSurface(m_pImpl->display, cfg, nativeWin, NULL);
+        if (!m_pImpl->surface && !nativeWin) {
+            nativeWin = Zeebo_GetNativeWindow();
             if (nativeWin) {
                 m_pImpl->surface = egl->eglCreateWindowSurface(m_pImpl->display, cfg, nativeWin, NULL);
             }
         }
+        Zeebo_Log("[EGL] surface=%p, eglCreateContext\n", m_pImpl->surface);
         m_pImpl->context = egl->eglCreateContext(m_pImpl->display, cfg, ZEEBO_EGL_NO_CONTEXT, NULL);
+        Zeebo_Log("[EGL] context=%p, eglMakeCurrent\n", m_pImpl->context);
         egl->eglMakeCurrent(m_pImpl->display, m_pImpl->surface, m_pImpl->surface, m_pImpl->context);
+        Zeebo_Log("[EGL] ready\n");
     }
 
     // Create 1x1 white fallback texture

@@ -141,11 +141,13 @@ void DirectSound::PlaySound(int bank, unsigned int slot)
 
     if (s_banks[bank].media && s_banks[bank].media->pvt) {
         IMedia* m = s_banks[bank].media;
+        Zeebo_Log("[SND] PlaySound bank=%d media=%p\n", bank, m);
         m->pvt->Stop(m);
         // MM_PARM_PLAY_REPEAT: 0 = loop forever, 1 = play once
         m->pvt->SetMediaParm(m, (int)MM_PARM_PLAY_REPEAT, s_banks[bank].loop ? 0 : 1, 0);
         m->pvt->SetMediaParm(m, (int)MM_PARM_VOLUME, MillibelsToBrewVol(s_banks[bank].vol), 0);
         m->pvt->Play(m);
+        Zeebo_Log("[SND] PlaySound bank=%d done\n", bank);
     }
 }
 

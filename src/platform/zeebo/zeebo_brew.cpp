@@ -7,6 +7,37 @@
 #include "../platform.h"
 
 #include <string.h>
+#ifdef AEE_SIMULATOR
+#include <windows.h>
+#include <stdio.h>
+static void SimSetModuleCwd(void)
+{
+    HMODULE hm = NULL;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)&SimSetModuleCwd, &hm) && hm) {
+        char path[MAX_PATH];
+        DWORD len = GetModuleFileNameA(hm, path, MAX_PATH);
+        if (len > 0 && len < MAX_PATH) {
+            char* slash = strrchr(path, '\\');
+            if (slash) {
+                *slash = '\0';
+                SetCurrentDirectoryA(path);
+            }
+        }
+    }
+}
+static void SimTrace(const char* msg)
+{
+    FILE* f = fopen("C:\\Users\\Esther\\AppData\\Local\\Temp\\re1_sim.log", "a");
+    if (f) {
+        fputs(msg, f);
+        fputc('\n', f);
+        fclose(f);
+    }
+}
+#else
+#define SimTrace(msg) ((void)0)
+#endif
 
 ZeeboRuntime g_Zeebo = { 0 };
 
@@ -61,9 +92,12 @@ static boolean Applet_HandleEvent(IApplet* po, AEEEvent eCode, uint16_t wParam, 
     (void)po;
     switch (eCode) {
     case EVT_APP_START:
+        SimTrace("EVT_APP_START enter");
         if (!Zeebo_OnAppStart()) {
+            SimTrace("Zeebo_OnAppStart failed");
             return FALSE;
         }
+        SimTrace("EVT_APP_START ok");
         g_Zeebo.bRunning = TRUE;
         if (g_Zeebo.pShell) {
             ISHELL_SetTimer(g_Zeebo.pShell, 1, FrameTimerCallback, NULL);
@@ -135,26 +169,37 @@ static uint32_t Module_Release(IModule* po)
 
 static int Module_CreateInstance(IModule* po, IShell* pIShell, AEECLSID ClsId, void** ppObj)
 {
+    SimTrace("Module_CreateInstance enter");
     (void)po;
     (void)ClsId;
     if (!ppObj || !pIShell || !g_Zeebo.pHelpers || !g_Zeebo.pHelpers->pfnMalloc) {
+        SimTrace("Module_CreateInstance bad args");
         return EFAILED;
     }
 
     g_Zeebo.pShell = pIShell;
 
     // Acquire core BREW services up front; optional ones (HID, Sound) may be NULL.
+    SimTrace("CreateInstance FILEMGR");
     ISHELL_CreateInstance(pIShell, AEECLSID_FILEMGR, (void**)&g_Zeebo.pFileMgr);
+    SimTrace("CreateInstance DISPLAY");
     ISHELL_CreateInstance(pIShell, AEECLSID_DISPLAY, (void**)&g_Zeebo.pDisplay);
+    SimTrace("CreateInstance EGL");
     ISHELL_CreateInstance(pIShell, AEECLSID_EGL,     (void**)&g_Zeebo.pEGL);
+    SimTrace("CreateInstance GL");
     ISHELL_CreateInstance(pIShell, AEECLSID_GL,      (void**)&g_Zeebo.pGL);
     if (!g_Zeebo.pGL) {
+        SimTrace("CreateInstance GLES11");
         ISHELL_CreateInstance(pIShell, AEECLSID_GLES11, (void**)&g_Zeebo.pGL);
     }
+    SimTrace("CreateInstance HID");
     ISHELL_CreateInstance(pIShell, AEECLSID_HID,       (void**)&g_Zeebo.pHID);
+    SimTrace("CreateInstance SOUND");
     ISHELL_CreateInstance(pIShell, AEECLSID_SOUND,     (void**)&g_Zeebo.pSound);
+    SimTrace("CreateInstance MEDIAUTIL");
     ISHELL_CreateInstance(pIShell, AEECLSID_MEDIAUTIL, (void**)&g_Zeebo.pMediaUtil);
 
+    SimTrace("Alloc Re1Applet");
     Re1Applet* app = (Re1Applet*)g_Zeebo.pHelpers->pfnMalloc(sizeof(Re1Applet));
     if (!app) {
         return ENOMEMORY;
@@ -164,6 +209,7 @@ static int Module_CreateInstance(IModule* po, IShell* pIShell, AEECLSID ClsId, v
 
     g_Zeebo.pApplet = (IApplet*)app;
     *ppObj = app;
+    SimTrace("Module_CreateInstance ok");
     return AEE_SUCCESS;
 }
 
@@ -184,6 +230,12 @@ static const IModuleVtbl s_ModuleVtbl = {
 // ---------------------------------------------------------------------------
 // AEEMod_Load - Primary module entry point (placed at .text.entry / 0x0)
 // ---------------------------------------------------------------------------
+#ifdef AEE_SIMULATOR
+static void RunCppGlobalConstructors(void)
+{
+    // Win32 DLL CRT runs C++ global constructors automatically during DllMain.
+}
+#else
 typedef void (*InitFn)(void);
 extern "C" InitFn __init_array_start[];
 extern "C" InitFn __init_array_end[];
@@ -197,12 +249,16 @@ static void RunCppGlobalConstructors(void)
         if (*fn) (*fn)();
     }
 }
+#endif
 
 static AEEHelperFuncs* ResolveHelpers(void* ph)
 {
     if (ph) {
         return (AEEHelperFuncs*)ph;
     }
+#ifdef AEE_SIMULATOR
+    return NULL;
+#else
     uintptr_t addr = ((uintptr_t)&AEEMod_Load) & ~(uintptr_t)3u;
     for (int i = 0; i < 256; ++i) {
         const uint32_t* p = (const uint32_t*)(addr - (uintptr_t)(i * 4));
@@ -211,17 +267,27 @@ static AEEHelperFuncs* ResolveHelpers(void* ph)
         }
     }
     return *(((AEEHelperFuncs* const*)(uintptr_t)&AEEMod_Load) - 1);
+#endif
 }
 
+#ifdef AEE_SIMULATOR
+extern "C" __declspec(dllexport)
+#else
 extern "C" __attribute__((section(".text.entry")))
+#endif
 int AEEMod_Load(IShell* ps, void* ph, IModule** ppMod)
 {
+#ifdef AEE_SIMULATOR
+    SimSetModuleCwd();
+#endif
+    SimTrace("AEEMod_Load enter");
     if (!ps || !ppMod) {
         return EBADPARM;
     }
 
     AEEHelperFuncs* helpers = ResolveHelpers(ph);
     if (!helpers || !helpers->pfnMalloc) {
+        SimTrace("AEEMod_Load helpers NULL");
         return EFAILED;
     }
 
@@ -230,6 +296,7 @@ int AEEMod_Load(IShell* ps, void* ph, IModule** ppMod)
 
     RunCppGlobalConstructors();
 
+    SimTrace("AEEMod_Load malloc Re1Module");
     Re1Module* mod = (Re1Module*)helpers->pfnMalloc(sizeof(Re1Module));
     if (!mod) {
         return ENOMEMORY;
@@ -238,5 +305,6 @@ int AEEMod_Load(IShell* ps, void* ph, IModule** ppMod)
     mod->refCount = 1;
 
     *ppMod = (IModule*)mod;
+    SimTrace("AEEMod_Load ok");
     return AEE_SUCCESS;
 }
