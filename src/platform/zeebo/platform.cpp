@@ -114,6 +114,9 @@ BOOL plat_file_write(const char* path, const void* data, size_t size)
     if (!f) {
         return FALSE;
     }
+    if (f->pvt->Truncate) {
+        f->pvt->Truncate(f, 0);
+    }
 
     uint32_t written = 0;
     if (data && size > 0) {

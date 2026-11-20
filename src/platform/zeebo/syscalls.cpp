@@ -109,12 +109,19 @@ int _open(const char* name, int flags, ...)
         return -1;
     }
 
+    if ((acc == 1 || acc == 2) && (flags & 0x0400 /* O_TRUNC */) && f->pvt->Truncate) {
+        f->pvt->Truncate(f, 0);
+    }
+
     AEEFileInfo info;
     memset(&info, 0, sizeof(info));
     uint32_t fileSize = 0;
     int infoRc = f->pvt->GetInfo(f, &info);
     if (infoRc == AEE_SUCCESS) {
         fileSize = info.dwSize;
+    }
+    if ((acc == 1 || acc == 2) && (flags & 0x0400 /* O_TRUNC */)) {
+        fileSize = 0;
     }
     if (s_openLogCount <= 120) {
         Zeebo_Log("[INFO] '%s' rc=%d size=%u\n", norm, infoRc, (unsigned)fileSize);
