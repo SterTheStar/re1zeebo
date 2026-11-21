@@ -113,6 +113,9 @@ static boolean Applet_HandleEvent(IApplet* po, AEEEvent eCode, uint16_t wParam, 
         return TRUE;
 
     case EVT_APP_SUSPEND:
+        if (g_Zeebo.pfnAudioSuspend) {
+            g_Zeebo.pfnAudioSuspend();
+        }
         if (g_Zeebo.pShell) {
             ISHELL_CancelTimer(g_Zeebo.pShell, FrameTimerCallback, NULL);
         }

@@ -416,15 +416,56 @@ struct IHIDDevice {
 };
 
 // ---------------------------------------------------------------------------
-// IMediaUtil & IMedia (matching zeebx-core aee_slots::MEDIAUTIL / MEDIA)
+// IMediaUtil & IMedia (matching BREW 4.0.2 AEEIMedia.h & AEEMediaUtil.h)
 // ---------------------------------------------------------------------------
 #define MMD_FILE_NAME       0u
 #define MMD_BUFFER          1u
-#define MM_PARM_MEDIA_DATA  1u
-#define MM_PARM_VOLUME      4u
-#define MM_PARM_PLAY_REPEAT 11u
-#define MM_STATE_READY      2u
-#define MM_STATE_PLAY       3u
+
+#define MM_CMD_SETMEDIAPARM 2
+#define MM_CMD_GETMEDIAPARM 3
+#define MM_CMD_PLAY         4
+#define MM_CMD_RECORD       5
+#define MM_CMD_GETTOTALTIME 6
+
+#define MM_STATUS_START         1
+#define MM_STATUS_DONE          2
+#define MM_STATUS_ABORT         3
+#define MM_STATUS_MEDIA_SPEC    4
+#define MM_STATUS_TICK_UPDATE   5
+#define MM_STATUS_DATA_IO_DELAY 6
+#define MM_STATUS_SEEK          7
+#define MM_STATUS_SEEK_FAIL     8
+#define MM_STATUS_PAUSE         9
+#define MM_STATUS_PAUSE_FAIL    10
+#define MM_STATUS_RESUME        11
+#define MM_STATUS_RESUME_FAIL   12
+#define MM_STATUS_REPEAT        13
+
+#define MM_PARM_MEDIA_DATA    1
+#define MM_PARM_AUDIO_DEVICE  2
+#define MM_PARM_AUDIO_PATH    3
+#define MM_PARM_VOLUME        4
+#define MM_PARM_MUTE          5
+#define MM_PARM_PAN           8
+#define MM_PARM_PLAY_REPEAT   11
+#define MM_PARM_POS           12
+#define MM_PARM_CAPS          14
+#define MM_PARM_CHANNEL_SHARE 16
+
+#define MM_STATE_IDLE         1
+#define MM_STATE_READY        2
+#define MM_STATE_PLAY         3
+#define MM_STATE_RECORD       4
+#define MM_STATE_PLAY_PAUSE   5
+#define MM_STATE_RECORD_PAUSE 6
+
+#define MM_SEEK_START         0
+#define MM_SEEK_END           1
+#define MM_SEEK_CURRENT       2
+#define MM_SEEK_MODE_TIME     0x00
+
+#define AEE_MAX_VOLUME        100
+#define MM_MAX_PAN            128
 
 typedef struct AEEMediaData {
     uint32_t clsData;
@@ -432,12 +473,24 @@ typedef struct AEEMediaData {
     uint32_t dwSize;
 } AEEMediaData;
 
+typedef struct AEEMediaCmdNotify {
+    AEECLSID clsMedia;
+    IMedia*  pIMedia;
+    int      nCmd;
+    int      nSubCmd;
+    int      nStatus;
+    void*    pCmdData;
+    uint32_t dwSize;
+} AEEMediaCmdNotify;
+
+typedef void (*PFNMEDIANOTIFY)(void* pUser, AEEMediaCmdNotify* pCmdNotify);
+
 typedef struct IMediaUtilVtbl {
     uint32_t (*AddRef)(IMediaUtil* po);
     uint32_t (*Release)(IMediaUtil* po);
     int      (*QueryInterface)(IMediaUtil* po, AEEIID id, void** ppNew);
     int      (*CreateMedia)(IMediaUtil* po, AEEMediaData* pmd, IMedia** ppm);
-    int      (*EncodeMedia)(IMediaUtil* po, void* pInfo, IMedia** ppm);
+    int      (*EncodeMedia)(IMediaUtil* po, void* pRes, AEECLSID clsDest, void* pInfo, void* pcb);
     int      (*CreateMediaEx)(IMediaUtil* po, AEEMediaData* pmd, void* pEx, IMedia** ppm);
 } IMediaUtilVtbl;
 
@@ -449,13 +502,13 @@ typedef struct IMediaVtbl {
     uint32_t (*AddRef)(IMedia* po);
     uint32_t (*Release)(IMedia* po);
     int      (*QueryInterface)(IMedia* po, AEEIID id, void** ppNew);
-    int      (*RegisterNotify)(IMedia* po, void* pfn, void* pUser);
+    int      (*RegisterNotify)(IMedia* po, PFNMEDIANOTIFY pfnNotify, void* pUser);
     int      (*SetMediaParm)(IMedia* po, int nParmID, int32_t p1, int32_t p2);
     int      (*GetMediaParm)(IMedia* po, int nParmID, int32_t* p1, int32_t* p2);
     int      (*Play)(IMedia* po);
     int      (*Record)(IMedia* po);
     int      (*Stop)(IMedia* po);
-    int      (*Seek)(IMedia* po, int nMode, int32_t lOffset);
+    int      (*Seek)(IMedia* po, int eSeek, int32_t lOffset);
     int      (*Pause)(IMedia* po);
     int      (*Resume)(IMedia* po);
     int      (*GetTotalTime)(IMedia* po);
@@ -481,6 +534,7 @@ typedef struct ZeeboRuntime {
     IMediaUtil*     pMediaUtil;
     IApplet*        pApplet;
     boolean         bRunning;
+    void          (*pfnAudioSuspend)(void);
 } ZeeboRuntime;
 
 extern ZeeboRuntime g_Zeebo;

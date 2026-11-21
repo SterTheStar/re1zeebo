@@ -1,7 +1,10 @@
-// audio.cpp - Zeebo / BREW IMedia audio backend & DirectSound bank manager.
+// audio.cpp - Zeebo / BREW 4.0.2 IMedia audio backend & DirectSound bank manager.
 //
-// Uses BREW's IMediaUtil + IMedia (AEECLSID_MEDIAUTIL) to play WAV banks
-// through the console / zeebx-emu audio mixer.
+// Faithful to Qualcomm BREW 4.0.2 SDK (AEEIMedia.h / AEEMediaUtil.h):
+//   - Registers IMedia_RegisterNotify callback for async state tracking
+//   - Checks IMedia_GetState(pbStateChanging) before Stop / Release / status queries
+//   - Uses AEE_MAX_VOLUME (100), MM_PARM_PAN (0..MM_MAX_PAN), MM_PARM_PLAY_REPEAT
+//   - Stops active playback on EVT_APP_SUSPEND
 #include "../platform.h"
 #include "zeebo_brew.h"
 
@@ -11,35 +14,123 @@
 #include "../../system/AudioFile.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define MAX_BANKS 81
 
+enum BrewPlayState {
+    BPS_IDLE = 0,
+    BPS_STARTING,
+    BPS_PLAYING,
+    BPS_PAUSED,
+    BPS_DONE,
+    BPS_ABORTED
+};
+
 struct ZeeboSoundBank {
-    BOOL    active;
-    BOOL    playing;
-    BOOL    loop;
-    int     vol;        // DirectSound millibels (0 = full, -10000 = silent)
-    int     pan;
-    int     slot;
-    DWORD   startMs;
-    DWORD   durationMs;
-    IMedia* media;
-    char    path[260];
+    BOOL          active;
+    BOOL          loop;
+    int           vol;        // DirectSound millibels (0 = full, -10000 = silent)
+    int           pan;        // DirectSound pan (-10000 left, 0 center, +10000 right)
+    int           slot;
+    DWORD         cmdMs;
+    DWORD         startMs;
+    DWORD         durationMs;
+    BrewPlayState state;
+    IMedia*       media;
+    int           lastBrewVol;
+    int           lastBrewPan;
+    char          path[260];
+#ifdef AEE_SIMULATOR
+    uint8_t*      simBuf;
+    uint32_t      simBufSize;
+#endif
 };
 
 static ZeeboSoundBank s_banks[MAX_BANKS];
 
+static void OnBankMediaNotify(void* pUser, AEEMediaCmdNotify* pn)
+{
+    ZeeboSoundBank* b = (ZeeboSoundBank*)pUser;
+    if (!b || !pn || !b->media || pn->pIMedia != b->media) {
+        return;
+    }
+
+    switch (pn->nCmd) {
+    case MM_CMD_PLAY:
+        switch (pn->nStatus) {
+        case MM_STATUS_START:
+        case MM_STATUS_REPEAT:
+        case MM_STATUS_RESUME:
+            b->state = BPS_PLAYING;
+            b->startMs = plat_time_ms();
+            break;
+        case MM_STATUS_PAUSE:
+            b->state = BPS_PAUSED;
+            break;
+        case MM_STATUS_DONE:
+            b->state = BPS_DONE;
+            break;
+        case MM_STATUS_ABORT:
+            b->state = BPS_ABORTED;
+            break;
+        default:
+            break;
+        }
+        break;
+
+    case MM_CMD_GETTOTALTIME:
+        if (pn->nStatus == MM_STATUS_DONE && pn->pCmdData && pn->dwSize >= sizeof(uint32_t)) {
+            DWORD t = *(const uint32_t*)pn->pCmdData;
+            if (t > 0) b->durationMs = t;
+        }
+        break;
+
+    default:
+        break;
+    }
+}
+
 static int MillibelsToBrewVol(int mB)
 {
     if (mB <= -10000) return 0;
-    if (mB >= 0) return 100;
+    if (mB >= 0) return AEE_MAX_VOLUME;
     double amp = pow(10.0, (double)mB / 2000.0);
-    int v = (int)(amp * 100.0 + 0.5);
+    int v = (int)(amp * (double)AEE_MAX_VOLUME + 0.5);
     if (v < 0) v = 0;
-    if (v > 100) v = 100;
+    if (v > AEE_MAX_VOLUME) v = AEE_MAX_VOLUME;
     return v;
+}
+
+static int DsPanToBrewPan(int dsPan)
+{
+    // DirectSound pan: -10000 (left) .. 0 (center) .. +10000 (right) -> BREW 0..MM_MAX_PAN (128)
+    int p = ((dsPan + 10000) * MM_MAX_PAN) / 20000;
+    if (p < 0) p = 0;
+    if (p > MM_MAX_PAN) p = MM_MAX_PAN;
+    return p;
+}
+
+static void StopMediaSafe(IMedia* m)
+{
+    if (!m || !m->pvt) return;
+    boolean changing = FALSE;
+    int st = m->pvt->GetState(m, &changing);
+    if (st == MM_STATE_PLAY || st == MM_STATE_PLAY_PAUSE || changing) {
+        m->pvt->Stop(m);
+    }
+}
+
+static void OnRe1AudioSuspend(void)
+{
+    for (int i = 1; i < MAX_BANKS; ++i) {
+        if (s_banks[i].active && s_banks[i].media && s_banks[i].media->pvt) {
+            StopMediaSafe(s_banks[i].media);
+            s_banks[i].state = BPS_IDLE;
+        }
+    }
 }
 
 void plat_audio_probe_and_cache_volume(void)
@@ -65,6 +156,7 @@ DirectSound::DirectSound(HWND hwnd)
     // SoundApi.cpp checks offset +0x10 on g_pDirectSound before calling CreateSound/PlaySound.
     *(int*)((BYTE*)this + 0x10) = 1;
     memset(s_banks, 0, sizeof(s_banks));
+    g_Zeebo.pfnAudioSuspend = OnRe1AudioSuspend;
 }
 
 void DirectSound::compact(void) {}
@@ -74,18 +166,36 @@ int DirectSound::GetStatus(int bank)
     if (bank <= 0 || bank >= MAX_BANKS || !s_banks[bank].active) {
         return 0;
     }
-    if (s_banks[bank].media && s_banks[bank].media->pvt) {
-        boolean changing = FALSE;
-        int st = s_banks[bank].media->pvt->GetState(s_banks[bank].media, &changing);
-        return (st == (int)MM_STATE_PLAY) ? 1 : 0;
-    }
-    if (!s_banks[bank].playing) {
+    ZeeboSoundBank& b = s_banks[bank];
+    if (b.state == BPS_IDLE || b.state == BPS_DONE || b.state == BPS_ABORTED) {
         return 0;
     }
-    if (!s_banks[bank].loop && s_banks[bank].durationMs > 0) {
-        DWORD elapsed = plat_time_ms() - s_banks[bank].startMs;
-        if (elapsed >= s_banks[bank].durationMs) {
-            s_banks[bank].playing = FALSE;
+    if (b.media && b.media->pvt) {
+        boolean changing = FALSE;
+        int st = b.media->pvt->GetState(b.media, &changing);
+        if (st == MM_STATE_PLAY || st == MM_STATE_PLAY_PAUSE || changing) {
+            return 1;
+        }
+        if (b.state == BPS_STARTING && (plat_time_ms() - b.cmdMs) < 250u) {
+            return 1;
+        }
+#ifdef AEE_SIMULATOR
+        if (b.loop) {
+            return 1;
+        }
+        if (b.durationMs > 0 && (plat_time_ms() - b.startMs) < b.durationMs) {
+            return 1;
+        }
+        b.state = BPS_DONE;
+        return 0;
+#else
+        b.state = BPS_DONE;
+        return 0;
+#endif
+    }
+    if (!b.loop && b.durationMs > 0) {
+        if ((plat_time_ms() - b.startMs) >= b.durationMs) {
+            b.state = BPS_DONE;
             return 0;
         }
     }
@@ -94,6 +204,9 @@ int DirectSound::GetStatus(int bank)
 
 void DirectSound::Release(void)
 {
+    if (g_Zeebo.pfnAudioSuspend == OnRe1AudioSuspend) {
+        g_Zeebo.pfnAudioSuspend = NULL;
+    }
     for (int i = 1; i < MAX_BANKS; ++i) {
         DestroySound(i);
     }
@@ -105,11 +218,18 @@ void DirectSound::Reload(void) {}
 void DirectSound::DestroySound(int bank)
 {
     if (bank > 0 && bank < MAX_BANKS) {
-        if (s_banks[bank].media && s_banks[bank].media->pvt) {
-            s_banks[bank].media->pvt->Stop(s_banks[bank].media);
-            s_banks[bank].media->pvt->Release(s_banks[bank].media);
+        ZeeboSoundBank& b = s_banks[bank];
+        if (b.media && b.media->pvt) {
+            b.media->pvt->RegisterNotify(b.media, NULL, NULL);
+            StopMediaSafe(b.media);
+            b.media->pvt->Release(b.media);
         }
-        memset(&s_banks[bank], 0, sizeof(s_banks[bank]));
+#ifdef AEE_SIMULATOR
+        if (b.simBuf) {
+            free(b.simBuf);
+        }
+#endif
+        memset(&b, 0, sizeof(b));
     }
 }
 
@@ -122,10 +242,9 @@ int DirectSound::NewDirectSoundBuffer(DWORD* wavBlk)
 void DirectSound::StopSound(int bank)
 {
     if (bank > 0 && bank < MAX_BANKS) {
-        s_banks[bank].playing = FALSE;
-        if (s_banks[bank].media && s_banks[bank].media->pvt) {
-            s_banks[bank].media->pvt->Stop(s_banks[bank].media);
-        }
+        ZeeboSoundBank& b = s_banks[bank];
+        b.state = BPS_IDLE;
+        StopMediaSafe(b.media);
     }
 }
 
@@ -134,30 +253,46 @@ void DirectSound::PlaySound(int bank, unsigned int slot)
     if (bank <= 0 || bank >= MAX_BANKS || !s_banks[bank].active) {
         return;
     }
-    s_banks[bank].slot    = (int)slot;
-    s_banks[bank].loop    = (slot != 0) ? TRUE : FALSE;
-    s_banks[bank].playing = TRUE;
-    s_banks[bank].startMs = plat_time_ms();
+    ZeeboSoundBank& b = s_banks[bank];
+    b.slot    = (int)slot;
+    b.loop    = (slot != 0) ? TRUE : FALSE;
+    b.cmdMs   = plat_time_ms();
+    b.startMs = b.cmdMs;
+    b.state   = BPS_STARTING;
 
-    if (s_banks[bank].media && s_banks[bank].media->pvt) {
-        IMedia* m = s_banks[bank].media;
-        Zeebo_Log("[SND] PlaySound bank=%d media=%p\n", bank, m);
-        m->pvt->Stop(m);
-        // MM_PARM_PLAY_REPEAT: 0 = loop forever, 1 = play once
-        m->pvt->SetMediaParm(m, (int)MM_PARM_PLAY_REPEAT, s_banks[bank].loop ? 0 : 1, 0);
-        m->pvt->SetMediaParm(m, (int)MM_PARM_VOLUME, MillibelsToBrewVol(s_banks[bank].vol), 0);
-        m->pvt->Play(m);
-        Zeebo_Log("[SND] PlaySound bank=%d done\n", bank);
+    if (b.media && b.media->pvt) {
+        IMedia* m = b.media;
+        StopMediaSafe(m);
+        // MM_PARM_PLAY_REPEAT: 0 = loop forever, 1 = play once (default)
+        m->pvt->SetMediaParm(m, MM_PARM_PLAY_REPEAT, b.loop ? 0 : 1, 0);
+
+        int bv = MillibelsToBrewVol(b.vol);
+        b.lastBrewVol = bv;
+        m->pvt->SetMediaParm(m, MM_PARM_VOLUME, bv, 0);
+
+        int bp = DsPanToBrewPan(b.pan);
+        b.lastBrewPan = bp;
+        if (bp != (MM_MAX_PAN / 2)) {
+            m->pvt->SetMediaParm(m, MM_PARM_PAN, bp, 0);
+        }
+
+        if (m->pvt->Play(m) != AEE_SUCCESS) {
+            b.state = BPS_ABORTED;
+        }
     }
 }
 
 void DirectSound::SetVol(int bank, int vol)
 {
     if (bank > 0 && bank < MAX_BANKS) {
-        s_banks[bank].vol = vol;
-        if (s_banks[bank].media && s_banks[bank].media->pvt) {
-            s_banks[bank].media->pvt->SetMediaParm(
-                s_banks[bank].media, (int)MM_PARM_VOLUME, MillibelsToBrewVol(vol), 0);
+        ZeeboSoundBank& b = s_banks[bank];
+        b.vol = vol;
+        if (b.media && b.media->pvt) {
+            int bv = MillibelsToBrewVol(vol);
+            if (bv != b.lastBrewVol) {
+                b.lastBrewVol = bv;
+                b.media->pvt->SetMediaParm(b.media, MM_PARM_VOLUME, bv, 0);
+            }
         }
     }
 }
@@ -165,7 +300,15 @@ void DirectSound::SetVol(int bank, int vol)
 void DirectSound::SetPan(int bank, int pan)
 {
     if (bank > 0 && bank < MAX_BANKS) {
-        s_banks[bank].pan = pan;
+        ZeeboSoundBank& b = s_banks[bank];
+        b.pan = pan;
+        if (b.media && b.media->pvt) {
+            int bp = DsPanToBrewPan(pan);
+            if (bp != b.lastBrewPan) {
+                b.lastBrewPan = bp;
+                b.media->pvt->SetMediaParm(b.media, MM_PARM_PAN, bp, 0);
+            }
+        }
     }
 }
 
@@ -183,30 +326,62 @@ int DirectSound::CreateSound(const char* wavName)
 
     for (int i = 1; i < MAX_BANKS; ++i) {
         if (!s_banks[i].active) {
-            memset(&s_banks[i], 0, sizeof(s_banks[i]));
-            s_banks[i].active     = TRUE;
-            s_banks[i].durationMs = 250;
-            plat_normalize_path(wavName, s_banks[i].path, sizeof(s_banks[i].path));
+            ZeeboSoundBank& b = s_banks[i];
+            memset(&b, 0, sizeof(b));
+            b.active      = TRUE;
+            b.durationMs  = 250;
+            b.lastBrewVol = -1;
+            b.lastBrewPan = -1;
+            plat_normalize_path(wavName, b.path, sizeof(b.path));
             if (g_Zeebo.pFileMgr && g_Zeebo.pFileMgr->pvt &&
-                strncmp(s_banks[i].path, "assets/", 7) == 0 &&
-                g_Zeebo.pFileMgr->pvt->Test(g_Zeebo.pFileMgr, s_banks[i].path) != AEE_SUCCESS) {
-                memmove(s_banks[i].path, s_banks[i].path + 7, strlen(s_banks[i].path + 7) + 1);
+                strncmp(b.path, "assets/", 7) == 0 &&
+                g_Zeebo.pFileMgr->pvt->Test(g_Zeebo.pFileMgr, b.path) != AEE_SUCCESS) {
+                memmove(b.path, b.path + 7, strlen(b.path + 7) + 1);
             }
 
             if (g_Zeebo.pMediaUtil && g_Zeebo.pMediaUtil->pvt) {
                 AEEMediaData md;
                 md.clsData = MMD_FILE_NAME;
-                md.pData   = s_banks[i].path;
+                md.pData   = b.path;
                 md.dwSize  = 0;
                 IMedia* m = NULL;
                 int rc = g_Zeebo.pMediaUtil->pvt->CreateMedia(g_Zeebo.pMediaUtil, &md, &m);
-                static int s_sndLog = 0;
-                if (s_sndLog < 15) {
-                    ++s_sndLog;
-                    Zeebo_Log("[SND] CreateSound '%s' -> rc=%d media=%p\n", s_banks[i].path, rc, m);
+#ifdef AEE_SIMULATOR
+                if (rc != AEE_SUCCESS || !m || !m->pvt) {
+                    if (m && m->pvt) { m->pvt->Release(m); m = NULL; }
+                    FILE* fp = fopen(b.path, "rb");
+                    if (fp) {
+                        fseek(fp, 0, SEEK_END);
+                        long fsz = ftell(fp);
+                        fseek(fp, 0, SEEK_SET);
+                        if (fsz > 0 && fsz <= 4 * 1024 * 1024) {
+                            b.simBuf = (uint8_t*)malloc((size_t)fsz);
+                            if (b.simBuf) {
+                                if (fread(b.simBuf, 1, (size_t)fsz, fp) == (size_t)fsz) {
+                                    b.simBufSize = (uint32_t)fsz;
+                                    md.clsData = MMD_BUFFER;
+                                    md.pData   = b.simBuf;
+                                    md.dwSize  = b.simBufSize;
+                                    rc = g_Zeebo.pMediaUtil->pvt->CreateMedia(g_Zeebo.pMediaUtil, &md, &m);
+                                } else {
+                                    free(b.simBuf);
+                                    b.simBuf = NULL;
+                                }
+                            }
+                        }
+                        fclose(fp);
+                    }
                 }
-                if (rc == AEE_SUCCESS && m) {
-                    s_banks[i].media = m;
+#endif
+                if (rc == AEE_SUCCESS && m && m->pvt) {
+                    b.media = m;
+                    m->pvt->RegisterNotify(m, OnBankMediaNotify, &b);
+                    int totalMs = m->pvt->GetTotalTime(m);
+                    if (totalMs > 0) {
+                        b.durationMs = (DWORD)totalMs;
+                    }
+                } else if (m && m->pvt) {
+                    m->pvt->Release(m);
                 }
             }
             return i;
