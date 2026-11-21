@@ -82,8 +82,8 @@ static void OnBankMediaNotify(void* pUser, AEEMediaCmdNotify* pn)
         break;
 
     case MM_CMD_GETTOTALTIME:
-        if (pn->nStatus == MM_STATUS_DONE && pn->pCmdData && pn->dwSize >= sizeof(uint32_t)) {
-            DWORD t = *(const uint32_t*)pn->pCmdData;
+        if (pn->nStatus == MM_STATUS_DONE && pn->pCmdData) {
+            DWORD t = (DWORD)(uintptr_t)pn->pCmdData;
             if (t > 0) b->durationMs = t;
         }
         break;
