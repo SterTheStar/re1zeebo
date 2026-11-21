@@ -224,6 +224,11 @@ DWORD PollZeeboHidMask(void)
     if (s_hidDevice->pvt->GetPositionState(s_hidDevice, posInfo) == AEE_SUCCESS) {
         int lx = NormalizeHidAxisTo32767(s_idxLX, posInfo);
         int ly = NormalizeHidAxisTo32767(s_idxLY, posInfo);
+#ifdef AEE_SIMULATOR
+        // BREW 4.0.2 Simulator IHID.dll inverts Y axis (INVERT:Y in hid_devices.cfg -> UP=+32767, DOWN=-32768),
+        // whereas Zeebo expects UP < 0 and DOWN > 0.
+        ly = -ly;
+#endif
         if (ly < -s_deadzone) mask |= 0x00000001u; // UP
         if (ly >  s_deadzone) mask |= 0x00000002u; // DOWN
         if (lx < -s_deadzone) mask |= 0x00000004u; // LEFT
