@@ -45,6 +45,10 @@ void StopVideoAudio(void)
 void StartVideoAudio(int fromMs)
 {
     StopVideoAudio();
+#ifdef AEE_SIMULATOR
+    (void)fromMs;
+    return;
+#endif
     if (!s_avi || !g_Zeebo.pMediaUtil || !g_Zeebo.pMediaUtil->pvt) return;
 
     if (!AviDemux_ExtractWav(s_avi, fromMs, &s_audioWav, &s_audioWavSize)) {
