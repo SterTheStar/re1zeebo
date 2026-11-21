@@ -124,11 +124,6 @@ static boolean Applet_HandleEvent(IApplet* po, AEEEvent eCode, uint16_t wParam, 
         }
         return TRUE;
 
-    case EVT_KEY:
-    case EVT_KEY_PRESS:
-    case EVT_KEY_RELEASE:
-        return Zeebo_OnKeyEvent(eCode, wParam, dwParam);
-
     default:
         return FALSE;
     }

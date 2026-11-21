@@ -122,60 +122,16 @@ DWORD PollZeeboHidMask(void)
     return mask;
 }
 
-int MapBrewKeyToVK(uint16_t brewKey)
-{
-    switch (brewKey) {
-    case AVK_UP:     return 0x26; // VK_UP
-    case AVK_DOWN:   return 0x28; // VK_DOWN
-    case AVK_LEFT:   return 0x25; // VK_LEFT
-    case AVK_RIGHT:  return 0x27; // VK_RIGHT
-    case AVK_SELECT: return 0x0D; // VK_RETURN
-    case AVK_CLR:    return 0x1B; // VK_ESCAPE
-    case AVK_SOFT1:  return 0x20; // VK_SPACE
-    case AVK_SOFT2:  return 0x09; // VK_TAB
-    case AVK_1:      return '1';
-    case AVK_2:      return '2';
-    case AVK_3:      return '3';
-    case AVK_4:      return '4';
-    default:         return 0;
-    }
-}
-
-DWORD BuildFallbackKeyMask(void)
-{
-    DWORD mask = 0;
-    if (s_keyDown[0x26]) mask |= 0x00000001u; // UP
-    if (s_keyDown[0x28]) mask |= 0x00000002u; // DOWN
-    if (s_keyDown[0x25]) mask |= 0x00000004u; // LEFT
-    if (s_keyDown[0x27]) mask |= 0x00000008u; // RIGHT
-    if (s_keyDown[0x0D]) mask |= MARNI_XI_BTN_A;
-    if (s_keyDown[0x1B]) mask |= MARNI_XI_BTN_B;
-    if (s_keyDown[0x20]) mask |= MARNI_XI_BTN_X;
-    if (s_keyDown[0x09]) mask |= MARNI_XI_BTN_START;
-    return mask;
-}
-
 } // namespace
 
 // ---------------------------------------------------------------------------
-// BREW EVT_KEY handler + platform.h keyboard API
+// platform.h keyboard API (no EVT_KEY fallback; Zeebo uses IHID exclusively)
 // ---------------------------------------------------------------------------
 extern "C" boolean Zeebo_OnKeyEvent(AEEEvent evt, uint16_t keyCode, uint32_t dwParam)
 {
+    (void)evt;
+    (void)keyCode;
     (void)dwParam;
-    int vk = MapBrewKeyToVK(keyCode);
-    if (vk <= 0 || vk >= 256) {
-        return FALSE;
-    }
-
-    if (evt == EVT_KEY_PRESS || evt == EVT_KEY) {
-        plat_key_event(vk, TRUE);
-        return TRUE;
-    }
-    if (evt == EVT_KEY_RELEASE) {
-        plat_key_event(vk, FALSE);
-        return TRUE;
-    }
     return FALSE;
 }
 
@@ -217,7 +173,7 @@ bool IsEnabled() { return s_xinputEnabled; }
 void SetDeadzone(int deadzone) { s_deadzone = (deadzone > 0) ? deadzone : MARNI_XI_DEFAULT_DEADZONE; }
 void Init() { TryOpenZeeboPad(); }
 bool IsConnected() { return s_hidDevice != NULL; }
-DWORD Poll() { return s_xinputEnabled ? (PollZeeboHidMask() | BuildFallbackKeyMask()) : 0u; }
+DWORD Poll() { return s_xinputEnabled ? PollZeeboHidMask() : 0u; }
 
 } // namespace MarniXInput
 
