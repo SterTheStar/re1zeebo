@@ -63,6 +63,7 @@ typedef uint8_t  boolean;
 #define EVT_APP_STOP             0x0001u
 #define EVT_APP_SUSPEND          0x0002u
 #define EVT_APP_RESUME           0x0003u
+#define EVT_APP_NO_SLEEP         0x0405u
 #define EVT_KEY                  0x0100u
 #define EVT_KEY_PRESS            0x0101u
 #define EVT_KEY_RELEASE          0x0102u

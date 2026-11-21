@@ -124,6 +124,9 @@ static boolean Applet_HandleEvent(IApplet* po, AEEEvent eCode, uint16_t wParam, 
         }
         return TRUE;
 
+    case EVT_APP_NO_SLEEP:
+        return TRUE;
+
     default:
         return FALSE;
     }
