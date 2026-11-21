@@ -339,6 +339,7 @@ int DirectSound::CreateSound(const char* wavName)
                 memmove(b.path, b.path + 7, strlen(b.path + 7) + 1);
             }
 
+#ifndef AEE_SIMULATOR
             if (g_Zeebo.pMediaUtil && g_Zeebo.pMediaUtil->pvt) {
                 AEEMediaData md;
                 md.clsData = MMD_FILE_NAME;
@@ -384,6 +385,7 @@ int DirectSound::CreateSound(const char* wavName)
                     m->pvt->Release(m);
                 }
             }
+#endif
             return i;
         }
     }
