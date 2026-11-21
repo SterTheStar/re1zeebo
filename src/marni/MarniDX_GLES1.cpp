@@ -6,6 +6,7 @@
 #include "MarniDX.h"
 #include "MarniGLES1Funcs.h"
 #include "../platform/zeebo/zeebo_brew.h"
+#include "../platform/zeebo/zeebo_mempanel.h"
 #include "../game/Types.h"
 
 #include <math.h>
@@ -195,6 +196,8 @@ struct MarniDX::Impl {
     bool depthWriteEnabled = true;
     bool orthoActive = true;
     bool clientArraysEnabled = false;
+    uint32_t frameDrawCalls = 0;
+    uint32_t frameTris = 0;
 
     void ResetStateCache() {
         boundGlTex = 0;
@@ -301,6 +304,8 @@ struct MarniDX::Impl {
         glColorPointer(4, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].r);
 
         glDrawArrays(GLES1_TRIANGLES, 0, vertCount);
+        frameDrawCalls++;
+        frameTris += (uint32_t)(vertCount / 3);
     }
 
     void SetOrthoProjection() {
@@ -550,6 +555,15 @@ void MarniDX::Present()
         ++s_frameLog;
         Zeebo_Log("[FRAME] Present #%d view=%dx%d\n", s_frameLog, m_pImpl->viewW, m_pImpl->viewH);
     }
+    uint32_t dc   = m_pImpl->frameDrawCalls;
+    uint32_t tris = m_pImpl->frameTris;
+    int activeTex = 0;
+    for (int i = 1; i < MARNI_MAX_TEXTURES; ++i) {
+        if (m_pImpl->slots[i].tex != 0) ++activeTex;
+    }
+    ZeeboMemPanel::Draw(this, dc, tris, activeTex, MARNI_MAX_TEXTURES);
+    m_pImpl->frameDrawCalls = 0;
+    m_pImpl->frameTris      = 0;
     if (g_Zeebo.pEGL && g_Zeebo.pEGL->pvt && m_pImpl->display && m_pImpl->surface) {
         g_Zeebo.pEGL->pvt->eglSwapBuffers(m_pImpl->display, m_pImpl->surface);
     }

@@ -13,6 +13,7 @@
 #include "../../Globals.h"
 #include "../../marni/MarniInput.h"
 #include "../../marni/MarniXInput.h"
+#include "zeebo_mempanel.h"
 
 #include <string.h>
 
@@ -211,8 +212,18 @@ DWORD PollZeeboHidMask(void)
         }
     }
 
+    // Toggle memory diagnostics panel on Start + D-Pad Down
+    static bool s_prevMemCombo = false;
+    const uint32_t kMemComboMask = (1u << 11) | (1u << 14);
+    bool memCombo = ((s_hidButtonState & kMemComboMask) == kMemComboMask);
+    if (memCombo && !s_prevMemCombo) {
+        ZeeboMemPanel::Toggle();
+    }
+    s_prevMemCombo = memCombo;
+
     DWORD mask = 0;
     for (uint32_t i = 0; i < 16; ++i) {
+        if (i == 11 && memCombo) continue;
         if (s_hidButtonState & (1u << i)) {
             mask |= MapZeeboButtonIndexToMarniBit(i);
         }

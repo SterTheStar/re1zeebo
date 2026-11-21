@@ -132,6 +132,9 @@ typedef struct AEEHelperFuncs {
     void  (*pfnDbgPrintf)(const char* fmt, ...);                 // 39 (0x9C)
     void* _reserved40[4];                                        // 40..43
     uint32_t (*pfnGetUpTimeMS)(void);                            // 44 (0xB0)
+    void* _reserved45[32];                                       // 45..76
+    uint32_t (*pfnGetFSFree)(uint32_t* pdwTotal);                // 77 (0x134)
+    uint32_t (*pfnGetRAMFree)(uint32_t* pdwTotal, uint32_t* pdwLargest); // 78 (0x138)
 } AEEHelperFuncs;
 
 // ---------------------------------------------------------------------------

@@ -137,6 +137,7 @@ set(RE1_ZEEBO_PLATFORM_SOURCES
     src/platform/zeebo/hd_textures_stub.cpp
     src/platform/zeebo/syscalls.cpp
     src/platform/zeebo/stubs.cpp
+    src/platform/zeebo/zeebo_mempanel.cpp
 )
 
 if(ZEEBO_SIM)
