@@ -208,13 +208,21 @@ static void SetAudioPath(const char* path)
 {
     s_audioPath[0] = '\0';
     if (!path) return;
-    const char* slash = strrchr(path, '\\');
-    if (!slash) slash = strrchr(path, '/');
-    const char* base = slash ? slash + 1 : path;
-    const char* dot = strrchr(base, '.');
-    size_t n = dot ? (size_t)(dot - base) : strlen(base);
+    // Monta '< caminho do AVI >.AUDIO' mantendo o diretorio: o indice do PAK
+    // guarda 'MOVIE/PU.AUDIO', entao procurar só 'PU.AUDIO' (basename) nao
+    // encontrava nada e o FMV rodava mudo. NormalizeName() depois remove o
+    // './' e o 'USA/' e converte '\' em '/'.
+    const char* lastSlash = path;
+    for (const char* p = path; *p != '\0'; ++p) {
+        if (*p == '/' || *p == '\\') lastSlash = p + 1;
+    }
+    const char* dot = NULL;
+    for (const char* p = lastSlash; *p != '\0'; ++p) {
+        if (*p == '.') dot = p;   // ultimo ponto do nome de arquivo
+    }
+    size_t n = dot ? (size_t)(dot - path) : strlen(path);
     if (n > sizeof(s_audioPath) - 7u) n = sizeof(s_audioPath) - 7u;
-    memcpy(s_audioPath, base, n);
+    memcpy(s_audioPath, path, n);
     memcpy(s_audioPath + n, ".AUDIO", 7u);  // inclui o NUL
 }
 
