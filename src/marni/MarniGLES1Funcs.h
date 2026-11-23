@@ -28,7 +28,8 @@
 #define GLES1_LEQUAL                  0x0203
 
 #define GLES1_UNSIGNED_BYTE           0x1401
-#define GLES1_UNSIGNED_SHORT_5_5_5_1  0x8033
+// 0x8033 e' GL_UNSIGNED_SHORT_4_4_4_4; 5_5_5_1 e' 0x8034 (gl.h do BREW).
+#define GLES1_UNSIGNED_SHORT_5_5_5_1  0x8034
 #define GLES1_FLOAT                   0x1406
 
 #define GLES1_RGBA                    0x1908

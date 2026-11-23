@@ -156,11 +156,16 @@ static uint16_t* ConvertToTexture16(int width, int height, int bpp, const void* 
             dst[i] = (uint16_t)((r << 11) | (g << 6) | (b << 1) | 1u);
         }
     } else if (bpp == 16) {
+        // TIM/PSX 16-bit e' BGR555 (bit 15 livre). Nao basta copiar o valor:
+        // o bit de alpha do 5551 tem que ocupar o bit 0, empurrando B, G e R.
         const uint16_t* in16 = (const uint16_t*)src;
         for (size_t i = 0; i < count; ++i) {
             uint16_t p = in16[i];
+            uint16_t r = (uint16_t)((p >> 10) & 0x1Fu);
+            uint16_t g = (uint16_t)((p >> 5) & 0x1Fu);
+            uint16_t b = (uint16_t)(p & 0x1Fu);
             uint16_t a = (p == 0u) ? 0u : 1u; /* color-key do PSX */
-            dst[i] = (uint16_t)((p & 0xFFFEu) | a);
+            dst[i] = (uint16_t)((r << 11) | (g << 6) | (b << 1) | a);
         }
     } else {
         for (size_t i = 0; i < count; ++i) dst[i] = 0xFFFFu;
