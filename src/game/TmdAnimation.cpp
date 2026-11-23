@@ -545,6 +545,17 @@ void AsyncCreateTmdCallback(void)
 // ============================================================================
 unsigned int AsyncCreateTmdObject(unsigned int param1, unsigned int param2, unsigned int param3)
 {
+    // Fast path: o objeto ja' esta em cache. O original agendava via ExecAsync
+    // de qualquer forma, o que no port custa um yield+resume (2 trocas de
+    // contexto ARM) POR JUNTA de cada personagem. O resultado e' exatamente o
+    // mesmo ponteiro que CreateTmdObjectInternal devolveria, sem efeito colateral.
+    int slotIndex = *(const int*)(uintptr_t)(param3 + 8u);
+    if (slotIndex >= 0 && slotIndex < 251 && g_objectDeletePtr &&
+        g_objectDeletePtr[slotIndex] == (int)(uintptr_t)param3) {
+        g_asyncTmdResult = (DWORD)(uintptr_t)&g_tmdObjectBuffer[slotIndex * 0x1594];
+        return g_asyncTmdResult;
+    }
+
     g_asyncTmdDepth = param1;
     g_asyncTmdDataPtr = param2;
     g_asyncTmdObjectPtr = param3;

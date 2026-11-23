@@ -203,6 +203,8 @@ struct MarniDX::Impl {
     bool depthWriteEnabled = true;
     bool orthoActive = true;
     bool clientArraysEnabled = false;
+    const Gles1Vertex* lastVertexPtr = NULL;  // cache dos 3 array pointers
+    int lastPosComponents = 3;
     uint32_t frameDrawCalls = 0;
     uint32_t frameTris = 0;
 
@@ -213,6 +215,8 @@ struct MarniDX::Impl {
         depthTestEnabled = false;
         depthWriteEnabled = true;
         orthoActive = true;
+        lastVertexPtr = NULL;
+        lastPosComponents = 3;
     }
 
     void SetDepthState(bool test, bool write) {
@@ -306,9 +310,16 @@ struct MarniDX::Impl {
             clientArraysEnabled = true;
         }
 
-        glVertexPointer(posComponents, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].x);
-        glTexCoordPointer(2, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].u);
-        glColorPointer(4, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].r);
+        // Os arrays vindos de DrawTriangles* usam sempre o mesmo buffer
+        // estatico; reenviar os 3 pointers em cada batch e' 3 chamadas IGL
+        // desperdicadas (68 draw calls no teste com 3 personagens).
+        if (v != lastVertexPtr || posComponents != lastPosComponents) {
+            glVertexPointer(posComponents, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].x);
+            glTexCoordPointer(2, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].u);
+            glColorPointer(4, GLES1_FLOAT, sizeof(Gles1Vertex), &v[0].r);
+            lastVertexPtr = v;
+            lastPosComponents = posComponents;
+        }
 
         glDrawArrays(GLES1_TRIANGLES, 0, vertCount);
         frameDrawCalls++;
