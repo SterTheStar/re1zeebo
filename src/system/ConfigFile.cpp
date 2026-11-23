@@ -268,7 +268,13 @@ const char* ConfigFile_Find(void)
     char exeDir[240] = "";
     char exePath[300] = "";
     if (plat_exe_dir(exeDir, sizeof(exeDir))) {
+#ifdef __ZEEBO__
+        // Zeebo Developer Guide 11.3: configuracao do usuario em udata/.
+        snprintf(exePath, sizeof(exePath), "%s%cudata%c%s",
+                 exeDir, kPathSep, kPathSep, CONFIG_NAME);
+#else
         snprintf(exePath, sizeof(exePath), "%s%c%s", exeDir, kPathSep, CONFIG_NAME);
+#endif
         if (FileExists(exePath)) {
             strncpy(s_path, exePath, sizeof(s_path) - 1);
             s_path[sizeof(s_path) - 1] = '\0';
@@ -277,11 +283,19 @@ const char* ConfigFile_Find(void)
         }
     }
 
+#ifdef __ZEEBO__
+    static const char* kCandidates[] = {
+        "./udata/" CONFIG_NAME, "udata/" CONFIG_NAME,
+    };
+    const int kCandidateCount = 2;
+#else
     static const char* kCandidates[] = {
         "./" CONFIG_NAME, CONFIG_NAME, "../" CONFIG_NAME, "../../" CONFIG_NAME,
     };
+    const int kCandidateCount = 4;
+#endif
 
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < kCandidateCount; ++i) {
         if (FileExists(kCandidates[i])) {
             strncpy(s_path, kCandidates[i], sizeof(s_path) - 1);
             s_path[sizeof(s_path) - 1] = '\0';

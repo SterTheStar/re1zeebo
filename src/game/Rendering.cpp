@@ -2069,7 +2069,12 @@ void CreateTimestampedLogFile(void)
     sprintf(fileName + len - 1, ".BMP");
 
     // Prepend the install path (g_szInstallPath)
+#ifdef __ZEEBO__
+    // Zeebo Developer Guide 11.3: qualquer arquivo gerado vai em udata/.
+    sprintf(fullPath, "udata/%s", fileName);
+#else
     sprintf(fullPath, "%s%s", g_szInstallPath, fileName);
+#endif
 
     // if (GetFreeDiskSpaceMB(fullPath) > 1) {
         g_MarniFrameBuffer.SaveBitmapToFile(fullPath);

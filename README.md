@@ -43,8 +43,9 @@ o módulo descompacta tudo transparentemente na leitura. O áudio é tocado em
 **streaming** direto do PAK (`ISource` + `AEECLSID_MEDIAPCM`), então nem o PCM
 dos filmes nem os bancos de som ficam inteiros na RAM — só ~8 KB por voz.
 Basta copiar a pasta para o SD (ou carregar no Zeebx). `config.ini` e saves
-continuam soltos; o log em arquivo é desligado no hardware (só o simulador
-escreve `re1_zeebo.log`).
+continuam soltos, sempre dentro de `udata/` (exigência do Zeebo Developer Guide
+§11.3); o log em arquivo é desligado no hardware (só o simulador escreve
+`udata/re1_zeebo.log`).
 
 Os arquivos crus do PC não são mais incluídos no repositório. Se precisar
 regerar, copie `USA/` de uma instalação GOG/retail para uma pasta temporária
@@ -71,10 +72,12 @@ Este pacote tem **352 MB** — **não cabe na NAND**. Por isso:
    sobra um `zmcp.dat` e parte do jogo na NAND, esgotando os 30–60 MB livres e
    desestabilizando o console.
 
-Os saves (`SAVE/savedat1..16.dat`, `bonus.dat`, `batrank.dat`) e o `config.ini`
-são criados na pasta privada do app na **eNAND**. O `RE1DATA.PAK` é **somente
-leitura**. Nenhuma escrita pode sair da pasta do app: caminhos absolutos,
-prefixos `fs:`/`mmc4:`/drive e segmentos `..` são recusados pelo runtime.
+Os saves (`udata/SAVE/savedat1..16.dat`, `bonus.dat`, `batrank.dat`) e o
+`config.ini` são criados em **`/mod/990001/udata/`** na **eNAND**, conforme o
+**Zeebo Developer Guide §11.3**: todo dado gerado pelo jogo deve ficar em
+`udata/`, nunca na raiz do módulo. O `RE1DATA.PAK` é **somente leitura**.
+Nenhuma escrita pode sair da pasta do app: caminhos absolutos, prefixos
+`fs:`/`mmc4:`/drive e segmentos `..` são recusados pelo runtime.
 
 ---
 

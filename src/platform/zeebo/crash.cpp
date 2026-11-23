@@ -42,7 +42,7 @@ extern "C" void Zeebo_Log(const char* fmt, ...)
     if (g_Zeebo.pFileMgr && g_Zeebo.pFileMgr->pvt) {
         if (!s_logFile) {
             s_logFile = g_Zeebo.pFileMgr->pvt->OpenFile(
-                g_Zeebo.pFileMgr, "re1_zeebo.log",
+                g_Zeebo.pFileMgr, "udata/re1_zeebo.log",
                 (OpenFileMode)(_OFM_READWRITE | _OFM_CREATE));
         }
         if (s_logFile && s_logFile->pvt) {

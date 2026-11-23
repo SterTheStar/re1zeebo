@@ -104,6 +104,18 @@ BOOL plat_mkdir(const char* path)
     }
     char norm[260];
     if (!plat_write_path_safe(path, norm, sizeof(norm))) return FALSE;
+
+    // IFileMgr::MkDir nao cria os diretorios intermediarios. Como os dados
+    // gerados ficam em udata/SAVE/, cria "udata" antes de "udata/SAVE".
+    for (char* p = norm + 1; *p != '\0'; ++p) {
+        if (*p == '/') {
+            char slash = *p;
+            *p = '\0';
+            g_Zeebo.pFileMgr->pvt->MkDir(g_Zeebo.pFileMgr, norm);
+            *p = slash;
+        }
+    }
+
     int rc = g_Zeebo.pFileMgr->pvt->MkDir(g_Zeebo.pFileMgr, norm);
     return (rc == AEE_SUCCESS || rc == EFILEEXISTS) ? TRUE : FALSE;
 }

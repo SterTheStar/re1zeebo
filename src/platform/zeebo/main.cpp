@@ -162,6 +162,10 @@ BOOL plat_display_desktop_size(int* width, int* height)
 
 extern "C" boolean Zeebo_OnAppStart(void)
 {
+    // Zeebo Developer Guide 11.3: udata/ e' a unica pasta onde o jogo pode
+    // gravar dados gerados. Cria antes de qualquer log/config/save.
+    plat_mkdir("udata");
+
     crashlog_install();
     crashlog_mark("Zeebo_OnAppStart");
 

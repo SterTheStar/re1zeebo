@@ -348,8 +348,16 @@ const char* GetSaveRoot(void)
         raw = GAME_SAVE_ROOT;   // nothing configured
     } else {
         static char s_defaultSave[260];
+#ifdef __ZEEBO__
+        // Zeebo Developer Guide 11.3: todo dado gerado pelo jogo (config,
+        // save, etc.) deve ficar em /mod/<app>/udata/. Escrever na raiz do
+        // modulo deixaria "vestigios" fora da area de dados do jogo.
+        sprintf_s(s_defaultSave, sizeof(s_defaultSave), "%s%cudata%cSAVE%c",
+                  s_base, PATH_SEP, PATH_SEP, PATH_SEP);
+#else
         sprintf_s(s_defaultSave, sizeof(s_defaultSave), "%s%cSAVE%c",
                   s_base, PATH_SEP, PATH_SEP);
+#endif
         raw = s_defaultSave;
     }
 

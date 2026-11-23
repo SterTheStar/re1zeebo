@@ -244,10 +244,11 @@ sobre BREW.
   absolutos (`/`, `\`), prefixos de drive/esquema (`C:`, `fs:`, `mmc4:`) e
   segmentos `..`. Motivo: IFileMgr resolveria isso no filesystem do dispositivo
   e poderia chegar à NAND de 128 MB do sistema — ver §20.
-- Saves: `SAVE/savedat1.dat` … `savedat16.dat` (2690 B cada, `SAVE_FILE_SIZE
-  = 0xA86` em `SaveLoadScreen.cpp`), `SAVE/bonus.dat` (32 B) e
-  `SAVE/batrank.dat`. `GetSaveRoot()` resolve para `SAVE/` e a pasta é criada
-  com `plat_mkdir`. Total ~45 KB, abaixo do limite de 64 KB do guia Zeebo.
+- Saves: `udata/SAVE/savedat1.dat` … `savedat16.dat` (2690 B cada,
+  `SAVE_FILE_SIZE = 0xA86` em `SaveLoadScreen.cpp`), `udata/SAVE/bonus.dat`
+  (32 B) e `udata/SAVE/batrank.dat`. `GetSaveRoot()` resolve para `udata/SAVE/`
+  no Zeebo (Developer Guide §11.3); `plat_mkdir` cria os pais (`udata`, depois
+  `udata/SAVE`). Total ~45 KB, abaixo do limite de 64 KB do guia Zeebo.
 - `plat_file_read_all` usa `IFile::GetInfo` + `Read` em loop, com padding de 16
   bytes; `plat_file_write` usa `_OFM_READWRITE|_OFM_CREATE` + `Truncate(0)`;
   `plat_dir_list` faz duas passagens (dirs, depois arquivos) com
@@ -260,7 +261,9 @@ sobre BREW.
 - `plat_display_desktop_size` fixa 640×480 (composite NTSC/PAL-M);
   `plat_single_instance_check` = TRUE (BREW roda um applet foreground).
 - `ConfigFile_Load/Save` em `src/system/ConfigFile.cpp`; o save da config é
-  forçado no shutdown (`CleanupVideoConfigAndSaveAllSettings`).
+  forçado no shutdown (`CleanupVideoConfigAndSaveAllSettings`). No Zeebo o
+  arquivo é `udata/config.ini` (§11.3), criado após `plat_mkdir("udata")` no
+  `Zeebo_OnAppStart`.
 
 ## 8. Renderer GLES1 (`MarniDX_GLES1.cpp`, `MarniGLES1Funcs.h`)
 
@@ -592,8 +595,9 @@ intercepta tres pontos, todos transparentes para `src/game/`:
 
 Nomes consultados como `.\usa\MOVIE\PU.avi`, `assets/...`, `USA/...` e
 maiúsculas/minúsculas misturadas sao normalizados antes da busca binaria no
-indice. `config.ini`, saves, `bonus.dat` e `batrank.dat` **ficam soltos** (fora
-do PAK) porque precisam de escrita; `re1_zeebo.log` só existe no simulador.
+indice. `udata/config.ini`, saves, `bonus.dat` e `batrank.dat` **ficam soltos**
+(fora do PAK) porque precisam de escrita, sempre dentro de `udata/` (§11.3);
+`re1_zeebo.log` só existe no simulador, também em `udata/`.
 
 Plano B se o emulador/hardware nao abrir um arquivo de 341 MB: dividir em
 2–3 PAKs por categoria com o mesmo formato — o indice e por arquivo, entao a
@@ -662,15 +666,21 @@ NAND, esgotando o espaço e causando instabilidade. Nosso desligamento é limpo
 (`ISHELL_CloseApplet` → `EVT_APP_STOP` → `Zeebo_OnAppStop`), o que ajuda o
 ZeeboMCP a limpar; um crash ainda pode deixar vestígio — isso é do sistema.
 
-**Escritas do port** (todas relativas, resolvidas em `/mod/990001/` na eNAND):
+**Escritas do port** (todas relativas, resolvidas em `/mod/990001/udata/` na
+eNAND). O **Zeebo Developer Guide §11.3** exige que *todo* dado gerado pelo jogo
+(config, save etc.) fique em `udata/`, nunca na raiz do módulo:
 
 | Arquivo | Tamanho | Caminho no código |
 |---|---|---|
-| `SAVE/savedat1..16.dat` | 2690 B × 16 | `SaveLoadScreen.cpp:435` (`fopen "wb"`) → `_open` → `IFile::Write` |
-| `SAVE/bonus.dat` | 32 B | `Bonus.cpp:89` (`plat_file_write`) |
-| `SAVE/batrank.dat` | ~1 KB | `SaturnBattle.cpp:1132` |
-| `config.ini` | ~alguns KB | `ConfigFile.cpp:670` (`fopen "w"`), no shutdown |
-| `re1_zeebo.log` | **nenhum no hardware** | `crash.cpp` — `#ifdef AEE_SIMULATOR` |
+| `udata/SAVE/savedat1..16.dat` | 2690 B × 16 | `SaveLoadScreen.cpp:435` (`fopen "wb"`) → `_open` → `IFile::Write` |
+| `udata/SAVE/bonus.dat` | 32 B | `Bonus.cpp:89` (`plat_file_write`) |
+| `udata/SAVE/batrank.dat` | ~1 KB | `SaturnBattle.cpp:1132` |
+| `udata/config.ini` | ~alguns KB | `ConfigFile.cpp` (`fopen "w"`), no shutdown |
+| `udata/re1_zeebo.log` | **nenhum no hardware** | `crash.cpp` — `#ifdef AEE_SIMULATOR` |
+
+`GetSaveRoot()` e `ConfigFile_Find()` usam o prefixo `udata/`; `plat_mkdir` cria
+os diretórios intermediários (IFileMgr não cria pais) e `Zeebo_OnAppStart`
+cria `udata` antes de qualquer log/config/save.
 
 `RE1DATA.PAK` é aberto com `_OFM_READ` (`re1_archive.cpp:105`) e **jamais**
 escrito. `plat_write_path_safe` barra qualquer escrita que tente sair da pasta
