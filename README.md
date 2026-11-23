@@ -21,7 +21,7 @@ Port não oficial, gratuito e de código aberto desenvolvido por **Esther** ([pa
 | :--- | :--- |
 | **Sistema (BREW 4.0.2)** | Ciclo `IApplet`, timer em 30 fps, heap/I/O via `pfnMalloc` e `IFileMgr`, troca de contexto ARMv6 (`TaskScheduler_arm.S`) |
 | **Gráficos (GLES 1.1)** | Contexto EGL `RGB565` + `DEPTH16` em `640x480`, texturas TIM em `RGBA8888`, perspectiva 3D com `w` e depth test |
-| **Desempenho** | Build `-O2` com soft-float puro (`-mfloat-abi=soft`, **sem VFP/VFPv2**), cache de estado GLES1 e buffers reutilizáveis para modelos 3D |
+| **Desempenho** | Build `-O2` com soft-float puro (`-mfloat-abi=soft`, **sem VFP/VFPv2**); o `.mod` final é limpo por `patch_vfp.py` (zero instruções VFP/WMMX), cache de estado GLES1 e buffers reutilizáveis para modelos 3D |
 | **Cutscenes (FMV)** | Demuxer AVI em streaming, decodificador Cinepak e faixa de áudio PCM reproduzida via `IMedia` |
 | **Áudio e Controles** | Bancos WAV via `IMediaUtil` e suporte nativo ao Z-Pad via `IHID` (com fallback de teclado via `EVT_KEY`) |
 

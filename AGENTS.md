@@ -53,6 +53,7 @@ código do jogo (idêntico ao PC/Linux)
 | `tools/zeebo/re1pack.py` | Empacotador offline: gera os arquivos R1LZ a partir de uma `USA/` original |
 | `tools/zeebo/adpcm_fast.{c,dll}` | Encoder IMA ADPCM em C, chamado pelo `re1pack.py` via `ctypes` |
 | `tools/zeebo/make_pak.py` | Junta a árvore R1LZ em `RE1DATA.PAK` com índice ordenado |
+| `tools/zeebo/patch_vfp.py` | Watchdog pós-build: troca as 14 instruções VFP/WMMX mortas do libgcc/libstdc++ por ARM NOP no `.mod` |
 | `dist/zeebo_sd/` | **Pacote oficial**: 3 arquivos — `mif/990001.mif`, `mod/990001/990001.mod`, `mod/990001/RE1DATA.PAK` (352,22 MB, 2962 entradas; áudio em streaming) |
 | `tools/zeebo/elf2mod.x` | Script do linker da Qualcomm para módulos BREW (entry em `0x0`, relocações) |
 | `tools/zeebo/zeebo_mod.ld` | Script de fallback: `.mod` flat binário (com `.bss_pad`) |
@@ -84,6 +85,10 @@ cmake --build build/zeebo -j 8
 
 Saída: `build/zeebo/re1zeebo.elf` (~2,7 MB) e
 **`build/zeebo/re1zeebo.mod` (~11,5 MB)**, gerado por `elf2mod` como POST_BUILD.
+Em seguida o POST_BUILD roda `tools/zeebo/patch_vfp.py`, que substitui por ARM
+NOP as 14 instruções VFP/WMMX mortas do runtime de exceções do libgcc/libstdc++
+(`-fno-exceptions` + `.ARM.exidx` descartado). O `.mod` final tem **zero** bytes
+VFP/WMMX; o ELF fica intacto para depuração.
 
 ### 3.3 BREW Simulator (DLL x86)
 

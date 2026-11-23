@@ -210,7 +210,9 @@ else()
         )
         add_custom_command(TARGET re1zeebo.elf POST_BUILD
             COMMAND "${ZEEBO_ELF2MOD}" -output ${CMAKE_CURRENT_BINARY_DIR}/re1zeebo.mod $<TARGET_FILE:re1zeebo.elf>
-            COMMENT "Generating relocatable BREW module re1zeebo.mod via elf2mod"
+            COMMAND python "${CMAKE_CURRENT_SOURCE_DIR}/tools/zeebo/patch_vfp.py"
+                    $<TARGET_FILE:re1zeebo.elf> ${CMAKE_CURRENT_BINARY_DIR}/re1zeebo.mod
+            COMMENT "Generating relocatable BREW module re1zeebo.mod via elf2mod + patch_vfp"
         )
     else()
         target_link_options(re1zeebo.elf PRIVATE
