@@ -1,7 +1,8 @@
 // main.cpp - Zeebo / BREW 4.0.2 applet lifecycle & 33 ms frame pump.
 //
-// Counterpart of src/platform/linux/main.cpp. Instead of owning a blocking
-// main() loop, BREW drives frames via ISHELL_SetTimer callbacks routed from
+// BREW counterpart of the old PC main loops (those builds were removed).
+// Instead of owning a blocking main() loop, BREW drives frames via
+// ISHELL_SetTimer callbacks routed from
 // zeebo_brew.cpp into Zeebo_OnAppStart / Zeebo_OnFrameTick / Zeebo_OnAppStop.
 #include "zeebo_brew.h"
 
@@ -13,6 +14,7 @@
 #include "../../marni/MarniSystem.h"
 #include "pandora_logo.h"
 #include "splash_image.h"
+#include "re1_archive.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -163,6 +165,9 @@ extern "C" boolean Zeebo_OnAppStart(void)
     crashlog_install();
     crashlog_mark("Zeebo_OnAppStart");
 
+    crashlog_mark("RE1Arc_Open");
+    RE1Arc_Open("RE1DATA.PAK");   // se faltar, cai para arquivos soltos
+
     g_dwScreenWidth  = 640;
     g_dwScreenHeight = 480;
     g_bFullScreen    = TRUE;
@@ -231,5 +236,6 @@ extern "C" void Zeebo_OnAppStop(void)
 {
     FreeStartupSplash();
     CleanupVideoConfigAndSaveAllSettings();
+    RE1Arc_Close();
     MarniDX_DestroyGlobal();
 }

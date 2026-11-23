@@ -7,6 +7,8 @@
 //   - Stops active playback on EVT_APP_SUSPEND
 #include "../platform.h"
 #include "zeebo_brew.h"
+#include "re1_archive.h"
+#include "pcm_source.h"
 
 #include "../../Globals.h"
 #include "../../marni/MarniSound.h"
@@ -42,6 +44,12 @@ struct ZeeboSoundBank {
     IMedia*       media;
     int           lastBrewVol;
     int           lastBrewPan;
+    uint8_t*      wavBuf;       // fallback: WAV descompactado tocado via MMD_BUFFER
+    uint32_t      wavBufSize;
+    RE1PcmSource* pcmSrc;       // streaming: PCM cru sob demanda via ISource
+    BOOL          streaming;
+    AEEMediaDataEx   mdEx;      // precisa viver enquanto o IMedia existir
+    AEEMediaWaveSpec waveSpec;
     char          path[260];
 #ifdef AEE_SIMULATOR
     uint8_t*      simBuf;
@@ -170,6 +178,22 @@ int DirectSound::GetStatus(int bank)
     if (b.state == BPS_IDLE || b.state == BPS_DONE || b.state == BPS_ABORTED) {
         return 0;
     }
+    // PCM cru via ISource nao tem fim de stream: quem marca o tempo e' o jogo.
+    if (b.streaming && b.durationMs > 0 && b.media && b.media->pvt) {
+        DWORD elapsed = plat_time_ms() - b.startMs;
+        if (elapsed >= b.durationMs) {
+            if (b.loop) {
+                RE1PcmSource_Reset(b.pcmSrc);
+                StopMediaSafe(b.media);
+                b.media->pvt->Play(b.media);
+                b.startMs = plat_time_ms();
+                return 1;
+            }
+            StopMediaSafe(b.media);
+            b.state = BPS_DONE;
+            return 0;
+        }
+    }
     if (b.media && b.media->pvt) {
         boolean changing = FALSE;
         int st = b.media->pvt->GetState(b.media, &changing);
@@ -224,6 +248,8 @@ void DirectSound::DestroySound(int bank)
             StopMediaSafe(b.media);
             b.media->pvt->Release(b.media);
         }
+        free(b.wavBuf);
+        free(b.pcmSrc);
 #ifdef AEE_SIMULATOR
         if (b.simBuf) {
             free(b.simBuf);
@@ -263,6 +289,8 @@ void DirectSound::PlaySound(int bank, unsigned int slot)
     if (b.media && b.media->pvt) {
         IMedia* m = b.media;
         StopMediaSafe(m);
+        // O ISource de PCM cru e' sequencial: volta ao inicio antes de tocar.
+        if (b.streaming && b.pcmSrc) RE1PcmSource_Reset(b.pcmSrc);
         // MM_PARM_PLAY_REPEAT: 0 = loop forever, 1 = play once (default)
         m->pvt->SetMediaParm(m, MM_PARM_PLAY_REPEAT, b.loop ? 0 : 1, 0);
 
@@ -320,6 +348,49 @@ int DirectSound::GetVol(int bank)
     return 0;
 }
 
+#ifndef AEE_SIMULATOR
+// Tenta tocar o WAV por streaming de PCM cru direto do PAK. Devolve NULL se
+// o dispositivo nao implementar MMD_ISOURCE / AEECLSID_MEDIAPCM (fallback).
+static IMedia* CreateStreamingMedia(ZeeboSoundBank& b)
+{
+    if (!RE1Arc_IsOpen() || !g_Zeebo.pShell || !g_Zeebo.pShell->pvt) return NULL;
+    const RE1ArcEntry* e = RE1Arc_Find(b.path);
+    if (!e) return NULL;
+
+    RE1PcmSource* src = (RE1PcmSource*)malloc(sizeof(RE1PcmSource));
+    if (!src) return NULL;
+    if (!RE1PcmSource_Init(src, e)) {
+        free(src);
+        return NULL;
+    }
+
+    IMedia* m = NULL;
+    if (ISHELL_CreateInstance(g_Zeebo.pShell, AEECLSID_MEDIAPCM, (void**)&m) != AEE_SUCCESS ||
+        !m || !m->pvt) {
+        if (m && m->pvt) m->pvt->Release(m);
+        free(src);
+        return NULL;
+    }
+
+    RE1Pcm_FillWaveSpec(&b.waveSpec, &src->info);
+    RE1Pcm_FillMediaData(&b.mdEx, RE1PcmSource_AsISource(src), &b.waveSpec, 8192u);
+    if (m->pvt->SetMediaParm(m, MM_PARM_MEDIA_DATA,
+                             (int32_t)&b.mdEx, 1) != AEE_SUCCESS) {
+        m->pvt->Release(m);
+        free(src);
+        return NULL;
+    }
+
+    b.pcmSrc = src;
+    b.streaming = TRUE;
+    uint64_t rate = b.waveSpec.dwBytesPerSec ? b.waveSpec.dwBytesPerSec : 44100u;
+    b.durationMs = (DWORD)(((uint64_t)src->info.pcmDataBytes * 1000ULL) / rate);
+    Zeebo_Log("[AUD] streaming '%s': %u ch %u Hz %u bytes PCM\n",
+              b.path, src->info.channels, src->info.sampleRate, src->info.pcmDataBytes);
+    return m;
+}
+#endif
+
 int DirectSound::CreateSound(const char* wavName)
 {
     if (!wavName) return 0;
@@ -340,52 +411,39 @@ int DirectSound::CreateSound(const char* wavName)
             }
 
 #ifndef AEE_SIMULATOR
-            if (g_Zeebo.pMediaUtil && g_Zeebo.pMediaUtil->pvt) {
-                AEEMediaData md;
-                md.clsData = MMD_FILE_NAME;
-                md.pData   = b.path;
-                md.dwSize  = 0;
-                IMedia* m = NULL;
-                int rc = g_Zeebo.pMediaUtil->pvt->CreateMedia(g_Zeebo.pMediaUtil, &md, &m);
-#ifdef AEE_SIMULATOR
-                if (rc != AEE_SUCCESS || !m || !m->pvt) {
-                    if (m && m->pvt) { m->pvt->Release(m); m = NULL; }
-                    FILE* fp = fopen(b.path, "rb");
-                    if (fp) {
-                        fseek(fp, 0, SEEK_END);
-                        long fsz = ftell(fp);
-                        fseek(fp, 0, SEEK_SET);
-                        if (fsz > 0 && fsz <= 4 * 1024 * 1024) {
-                            b.simBuf = (uint8_t*)malloc((size_t)fsz);
-                            if (b.simBuf) {
-                                if (fread(b.simBuf, 1, (size_t)fsz, fp) == (size_t)fsz) {
-                                    b.simBufSize = (uint32_t)fsz;
-                                    md.clsData = MMD_BUFFER;
-                                    md.pData   = b.simBuf;
-                                    md.dwSize  = b.simBufSize;
-                                    rc = g_Zeebo.pMediaUtil->pvt->CreateMedia(g_Zeebo.pMediaUtil, &md, &m);
-                                } else {
-                                    free(b.simBuf);
-                                    b.simBuf = NULL;
-                                }
-                            }
-                        }
-                        fclose(fp);
-                    }
-                }
+            // 1a escolha: streaming de PCM cru direto do PAK (~8 KB por voz).
+            IMedia* sm = CreateStreamingMedia(b);
+            if (sm) {
+                b.media = sm;
+                sm->pvt->RegisterNotify(sm, OnBankMediaNotify, &b);
+            } else
 #endif
+            // Fallback: WAV descompactado em RAM via MMD_BUFFER.
+            if (g_Zeebo.pMediaUtil && g_Zeebo.pMediaUtil->pvt) {
+                size_t wavSize = 0;
+                uint8_t* wav = (uint8_t*)plat_file_read_all(b.path, &wavSize);
+                AEEMediaData md;
+                md.clsData = MMD_BUFFER;
+                md.pData   = wav;
+                md.dwSize  = (uint32_t)wavSize;
+                IMedia* m = NULL;
+                int rc = (wav && wavSize > 44)
+                    ? g_Zeebo.pMediaUtil->pvt->CreateMedia(g_Zeebo.pMediaUtil, &md, &m)
+                    : EFAILED;
                 if (rc == AEE_SUCCESS && m && m->pvt) {
-                    b.media = m;
+                    b.media      = m;
+                    b.wavBuf     = wav;
+                    b.wavBufSize = (uint32_t)wavSize;
                     m->pvt->RegisterNotify(m, OnBankMediaNotify, &b);
                     int totalMs = m->pvt->GetTotalTime(m);
                     if (totalMs > 0) {
                         b.durationMs = (DWORD)totalMs;
                     }
-                } else if (m && m->pvt) {
-                    m->pvt->Release(m);
+                } else {
+                    if (m && m->pvt) m->pvt->Release(m);
+                    free(wav);
                 }
             }
-#endif
             return i;
         }
     }

@@ -28,6 +28,7 @@
 #define GLES1_LEQUAL                  0x0203
 
 #define GLES1_UNSIGNED_BYTE           0x1401
+#define GLES1_UNSIGNED_SHORT_5_5_5_1  0x8033
 #define GLES1_FLOAT                   0x1406
 
 #define GLES1_RGBA                    0x1908

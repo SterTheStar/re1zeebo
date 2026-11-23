@@ -1,9 +1,8 @@
 """Convert a --capture dump into a PNG (no third-party dependency).
 
 The Linux build's --capture flag writes "RE1CAP <w> <h>\\n" followed by
-w*h*4 raw RGBA bytes. This turns that into a PNG using only zlib + struct, so
-the static-frame comparison in docs/LINUX_PORT.md 6.7 works without
-ImageMagick or PIL installed.
+w*h*4 raw RGBA bytes. This turns that into a PNG using only zlib + struct,
+without ImageMagick or PIL installed.
 
 Usage:  python3 tests/rgba_to_png.py capture.rgba out.png
 """

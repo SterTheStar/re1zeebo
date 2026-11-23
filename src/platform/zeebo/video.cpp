@@ -1,12 +1,15 @@
 // video.cpp - Zeebo FMV playback backend (AVI + Cinepak -> GLES1 texture).
 #include "../platform.h"
 #include "zeebo_brew.h"
+#include "re1_archive.h"
+#include "pcm_source.h"
 #include "avi_demux.h"
 #include "cinepak.h"
 
 #include "../../marni/MarniDX.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 namespace {
 
@@ -16,8 +19,10 @@ AviDemux*       s_avi          = NULL;
 CinepakDecoder* s_cinepak      = NULL;
 MarniHandle     s_tex          = MARNI_NULL_HANDLE;
 IMedia*         s_audioMedia   = NULL;
-uint8_t*        s_audioWav     = NULL;
-uint32_t        s_audioWavSize = 0;
+char            s_audioPath[260] = "";
+RE1PcmSource*   s_audioSrc     = NULL;
+AEEMediaWaveSpec s_audioSpec;
+AEEMediaDataEx   s_audioMd;
 
 int    s_width       = 0;
 int    s_height      = 0;
@@ -37,9 +42,8 @@ void StopVideoAudio(void)
         s_audioMedia->pvt->Release(s_audioMedia);
     }
     s_audioMedia = NULL;
-    free(s_audioWav);
-    s_audioWav = NULL;
-    s_audioWavSize = 0;
+    free(s_audioSrc);
+    s_audioSrc = NULL;
 }
 
 void StartVideoAudio(int fromMs)
@@ -49,32 +53,57 @@ void StartVideoAudio(int fromMs)
     (void)fromMs;
     return;
 #endif
-    if (!s_avi || !g_Zeebo.pMediaUtil || !g_Zeebo.pMediaUtil->pvt) return;
 
-    if (!AviDemux_ExtractWav(s_avi, fromMs, &s_audioWav, &s_audioWavSize)) {
-        return;
+    // 1a escolha: entrada '<filme>.AUDIO' no PAK -> PCM cru via ISource.
+    // Nenhum WAV de dezenas de MB e' montado na RAM.
+    if (s_audioPath[0] && RE1Arc_IsOpen()) {
+        const RE1ArcEntry* e = RE1Arc_Find(s_audioPath);
+        if (e) {
+            RE1PcmSource* src = (RE1PcmSource*)malloc(sizeof(RE1PcmSource));
+            int ok = src && RE1PcmSource_Init(src, e);
+            IMedia* m = NULL;
+            if (ok && g_Zeebo.pShell && g_Zeebo.pShell->pvt) {
+                ok = (ISHELL_CreateInstance(g_Zeebo.pShell, AEECLSID_MEDIAPCM,
+                                            (void**)&m) == AEE_SUCCESS && m && m->pvt);
+            }
+            if (ok) {
+                RE1Pcm_FillWaveSpec(&s_audioSpec, &src->info);
+                RE1Pcm_FillMediaData(&s_audioMd, RE1PcmSource_AsISource(src),
+                                     &s_audioSpec, 8192u);
+                ok = (m->pvt->SetMediaParm(m, MM_PARM_MEDIA_DATA,
+                                           (int32_t)&s_audioMd, 1) == AEE_SUCCESS);
+            }
+            if (ok && fromMs > 0 && s_audioSpec.wBlockSize) {
+                uint32_t skip = (uint32_t)(((uint64_t)fromMs *
+                                  s_audioSpec.dwBytesPerSec) / 1000u);
+                skip -= skip % s_audioSpec.wBlockSize;
+                uint8_t tmp[4096];
+                while (skip) {
+                    int32_t want = skip > sizeof(tmp) ? (int32_t)sizeof(tmp) : (int32_t)skip;
+                    int32_t got = RE1PcmSource_ReadPcm(src, tmp, want);
+                    if (got <= 0) break;
+                    skip -= (uint32_t)got;
+                }
+            }
+            if (ok) {
+                m->pvt->SetMediaParm(m, MM_PARM_VOLUME, 100, 0);
+                ok = (m->pvt->Play(m) == AEE_SUCCESS);
+            }
+            if (ok) {
+                s_audioSrc = src;
+                s_audioMedia = m;
+                Zeebo_Log("[VID] audio streaming '%s' (%u Hz, %u ch)\n",
+                          s_audioPath, src->info.sampleRate, src->info.channels);
+                return;
+            }
+            if (m && m->pvt) m->pvt->Release(m);
+            free(src);
+        }
     }
-
-    AEEMediaData md;
-    md.clsData = MMD_BUFFER;
-    md.pData   = s_audioWav;
-    md.dwSize  = s_audioWavSize;
-
-    IMedia* m = NULL;
-    int rc = g_Zeebo.pMediaUtil->pvt->CreateMedia(g_Zeebo.pMediaUtil, &md, &m);
-    Zeebo_Log("[VID] audio CreateMedia(MMD_BUFFER, %u bytes) -> rc=%d media=%p\n",
-              (unsigned)s_audioWavSize, rc, m);
-    if (rc == AEE_SUCCESS && m && m->pvt) {
-        s_audioMedia = m;
-        m->pvt->SetMediaParm(m, (int)MM_PARM_PLAY_REPEAT, 1, 0);
-        m->pvt->SetMediaParm(m, (int)MM_PARM_VOLUME, 100, 0);
-        m->pvt->Play(m);
-    } else {
-        if (m && m->pvt) m->pvt->Release(m);
-        free(s_audioWav);
-        s_audioWav = NULL;
-        s_audioWavSize = 0;
-    }
+    // Sem fallback de WAV inteiro: ~19,9 MB de PCM estourariam os 32 MB.
+    // Se o streaming falhar, o filme roda sem audio (o video continua).
+    Zeebo_Log("[VID] ERRO: sem audio stream para '%s' (fromMs=%d)\n",
+              s_audioPath, fromMs);
 }
 
 void FreeVideoResources(void)
@@ -175,9 +204,24 @@ BOOL plat_video_init(void)
     return TRUE;
 }
 
+static void SetAudioPath(const char* path)
+{
+    s_audioPath[0] = '\0';
+    if (!path) return;
+    const char* slash = strrchr(path, '\\');
+    if (!slash) slash = strrchr(path, '/');
+    const char* base = slash ? slash + 1 : path;
+    const char* dot = strrchr(base, '.');
+    size_t n = dot ? (size_t)(dot - base) : strlen(base);
+    if (n > sizeof(s_audioPath) - 7u) n = sizeof(s_audioPath) - 7u;
+    memcpy(s_audioPath, base, n);
+    memcpy(s_audioPath + n, ".AUDIO", 7u);  // inclui o NUL
+}
+
 BOOL plat_video_open_and_play(const char* path, int playToMs)
 {
     Zeebo_Log("[VID] open_and_play '%s' playToMs=%d\n", path ? path : "(null)", playToMs);
+    SetAudioPath(path);
     FreeVideoResources();
     s_endEvent = FALSE;
 

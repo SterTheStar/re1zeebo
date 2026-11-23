@@ -4,6 +4,8 @@
 // to BREW's heap / IFileMgr so std::string, std::vector, fopen, etc. work on Zeebo.
 #include "../platform.h"
 #include "zeebo_brew.h"
+#include "re1_lz4.h"
+#include "re1_archive.h"
 
 #include <errno.h>
 #include <stdint.h>
@@ -74,7 +76,11 @@ void* _sbrk(ptrdiff_t incr)
 }
 
 #define MAX_FDS 32
+#define RE1_MEMFILE_MAX (4u * 1024u * 1024u)
 static IFile*   s_fdTable[MAX_FDS];
+static uint8_t  s_fdUsed[MAX_FDS];
+static uint8_t* s_fdMem[MAX_FDS];   // arquivo R1LZ descompactado em RAM
+static uint32_t s_fdMemSize[MAX_FDS];
 static uint32_t s_fdPos[MAX_FDS];
 static uint32_t s_fdSize[MAX_FDS];
 
@@ -95,6 +101,44 @@ int _open(const char* name, int flags, ...)
         mode = _OFM_READWRITE;
         if (flags & 0x0200 /* O_CREAT */) {
             mode = (OpenFileMode)(_OFM_READWRITE | _OFM_CREATE);
+        }
+    }
+
+    // Leitura de asset dentro do PAK: serve entirely da RAM (o _open normal
+    // adiante continua cuidando de saves/config/logs, que ficam soltos).
+    if (acc == 0 && RE1Arc_IsOpen()) {
+        RE1ArcFile vf;
+        if (RE1Arc_OpenFile(name, &vf)) {
+            uint32_t packedSize = RE1Arc_Size(&vf);
+            uint8_t* raw = (uint8_t*)malloc(packedSize ? packedSize : 1u);
+            if (!raw || !RE1Arc_Read(&vf, raw, packedSize)) {
+                free(raw);
+                errno = EIO;
+                return -1;
+            }
+            void* out = raw;
+            size_t outLen = packedSize;
+            int rc = RE1LZ_Unpack(raw, packedSize, &out, &outLen);
+            if (rc < 0) {
+                free(raw);
+                errno = EIO;
+                return -1;
+            }
+            if (rc == 1) free(raw);
+            for (int fd = 3; fd < MAX_FDS; ++fd) {
+                if (!s_fdUsed[fd]) {
+                    s_fdUsed[fd]   = 1;
+                    s_fdTable[fd]  = NULL;
+                    s_fdMem[fd]    = (uint8_t*)out;
+                    s_fdMemSize[fd]= (uint32_t)outLen;
+                    s_fdPos[fd]    = 0;
+                    s_fdSize[fd]   = (uint32_t)outLen;
+                    return fd;
+                }
+            }
+            free(out);
+            errno = EMFILE;
+            return -1;
         }
     }
 
@@ -127,14 +171,53 @@ int _open(const char* name, int flags, ...)
         Zeebo_Log("[INFO] '%s' rc=%d size=%u\n", norm, infoRc, (unsigned)fileSize);
     }
 
+    // Arquivos pequenos embrulhados em R1LZ sao inflados uma vez no _open e
+    // servidos da RAM. Arquivos grandes (FMV) ficam em streaming via IFile.
+    uint8_t* mem = NULL;
+    uint32_t memSize = 0;
+    if (fileSize >= RE1LZ_HEADER_SIZE && fileSize <= RE1_MEMFILE_MAX) {
+        uint8_t* raw = (uint8_t*)malloc(fileSize);
+        if (raw) {
+            uint32_t got = 0;
+            if (f->pvt->Seek(f, _SEEK_START, 0) == AEE_SUCCESS) {
+                while (got < fileSize) {
+                    int32_t n = f->pvt->Read(f, raw + got, fileSize - got);
+                    if (n <= 0) break;
+                    got += (uint32_t)n;
+                }
+            }
+            if (got == fileSize) {
+                void* out = NULL;
+                size_t outLen = 0;
+                int rc = RE1LZ_Unpack(raw, fileSize, &out, &outLen);
+                if (rc == 1) {
+                    mem = (uint8_t*)out;
+                    memSize = (uint32_t)outLen;
+                    fileSize = memSize;
+                } else if (rc < 0) {
+                    Zeebo_Log("[R1LZ] corrompido (stdio): %s\n", norm);
+                    free(raw);
+                    f->pvt->Release(f);
+                    errno = EIO;
+                    return -1;
+                }
+            }
+            free(raw);
+        }
+    }
+
     for (int fd = 3; fd < MAX_FDS; ++fd) {
-        if (!s_fdTable[fd]) {
-            s_fdTable[fd] = f;
-            s_fdPos[fd]   = 0;
-            s_fdSize[fd]  = fileSize;
+        if (!s_fdUsed[fd]) {
+            s_fdUsed[fd]     = 1;
+            s_fdTable[fd]    = f;
+            s_fdMem[fd]      = mem;
+            s_fdMemSize[fd]  = memSize;
+            s_fdPos[fd]      = 0;
+            s_fdSize[fd]     = fileSize;
             return fd;
         }
     }
+    free(mem);
     f->pvt->Release(f);
     errno = EMFILE;
     return -1;
@@ -142,9 +225,15 @@ int _open(const char* name, int flags, ...)
 
 int _close(int fd)
 {
-    if (fd >= 3 && fd < MAX_FDS && s_fdTable[fd]) {
-        s_fdTable[fd]->pvt->Release(s_fdTable[fd]);
-        s_fdTable[fd] = NULL;
+    if (fd >= 3 && fd < MAX_FDS && s_fdUsed[fd]) {
+        free(s_fdMem[fd]);
+        s_fdMem[fd]      = NULL;
+        s_fdMemSize[fd]  = 0;
+        if (s_fdTable[fd]) {
+            s_fdTable[fd]->pvt->Release(s_fdTable[fd]);
+            s_fdTable[fd] = NULL;
+        }
+        s_fdUsed[fd]  = 0;
         s_fdPos[fd]   = 0;
         s_fdSize[fd]  = 0;
         return 0;
@@ -155,7 +244,15 @@ int _close(int fd)
 
 int _read(int fd, void* ptr, int len)
 {
-    if (fd >= 3 && fd < MAX_FDS && s_fdTable[fd] && ptr && len >= 0) {
+    if (fd >= 3 && fd < MAX_FDS && s_fdUsed[fd] && ptr && len >= 0) {
+        if (s_fdMem[fd]) {
+            uint32_t avail = (s_fdPos[fd] < s_fdMemSize[fd])
+                           ? s_fdMemSize[fd] - s_fdPos[fd] : 0u;
+            uint32_t n = ((uint32_t)len < avail) ? (uint32_t)len : avail;
+            memcpy(ptr, s_fdMem[fd] + s_fdPos[fd], n);
+            s_fdPos[fd] += n;
+            return (int)n;
+        }
         int32_t n = s_fdTable[fd]->pvt->Read(s_fdTable[fd], ptr, (uint32_t)len);
         if (n > 0) {
             s_fdPos[fd] += (uint32_t)n;
@@ -179,7 +276,7 @@ int _write(int fd, const void* ptr, int len)
         }
         return len;
     }
-    if (fd >= 3 && fd < MAX_FDS && s_fdTable[fd] && ptr && len >= 0) {
+    if (fd >= 3 && fd < MAX_FDS && s_fdUsed[fd] && s_fdTable[fd] && ptr && len >= 0) {
         uint32_t n = s_fdTable[fd]->pvt->Write(s_fdTable[fd], ptr, (uint32_t)len);
         s_fdPos[fd] += n;
         if (s_fdPos[fd] > s_fdSize[fd]) s_fdSize[fd] = s_fdPos[fd];
@@ -191,7 +288,7 @@ int _write(int fd, const void* ptr, int len)
 
 int _lseek(int fd, int ptr, int dir)
 {
-    if (fd >= 3 && fd < MAX_FDS && s_fdTable[fd]) {
+    if (fd >= 3 && fd < MAX_FDS && s_fdUsed[fd]) {
         int32_t newPos = 0;
         FileSeekType st = _SEEK_START;
         if (dir == 0) {
@@ -205,7 +302,9 @@ int _lseek(int fd, int ptr, int dir)
             newPos = (int32_t)s_fdSize[fd] + ptr;
         }
         if (newPos < 0) newPos = 0;
-        s_fdTable[fd]->pvt->Seek(s_fdTable[fd], st, (int32_t)ptr);
+        if (!s_fdMem[fd]) {
+            s_fdTable[fd]->pvt->Seek(s_fdTable[fd], st, (int32_t)ptr);
+        }
         s_fdPos[fd] = (uint32_t)newPos;
         return (int)s_fdPos[fd];
     }
@@ -217,7 +316,12 @@ int _fstat(int fd, struct stat* st)
 {
     if (!st) return -1;
     memset(st, 0, sizeof(*st));
-    if (fd >= 3 && fd < MAX_FDS && s_fdTable[fd]) {
+    if (fd >= 3 && fd < MAX_FDS && s_fdUsed[fd] && s_fdMem[fd]) {
+        st->st_mode = S_IFREG;
+        st->st_size = (off_t)s_fdSize[fd];
+        return 0;
+    }
+    if (fd >= 3 && fd < MAX_FDS && s_fdUsed[fd] && s_fdTable[fd]) {
         AEEFileInfo info;
         if (s_fdTable[fd]->pvt->GetInfo(s_fdTable[fd], &info) == AEE_SUCCESS) {
             st->st_mode = S_IFREG;

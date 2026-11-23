@@ -3,9 +3,7 @@
 # Usage:
 #   cmake -S . -B build/zeebo -C cmake/zeebo-arm.cmake -G Ninja
 #   (or pass -DCMAKE_TOOLCHAIN_FILE=cmake/zeebo-arm.cmake)
-cmake_minimum_required(VERSION 3.16)
-project(residentevil_zeebo C CXX ASM)
-
+# cmake_minimum_required()/project() vivem no CMakeLists.txt raiz.
 option(ZEEBO_SIM "Build x86 DLL for Qualcomm BREW Simulator" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -135,6 +133,9 @@ set(RE1_ZEEBO_PLATFORM_SOURCES
     src/platform/zeebo/config.cpp
     src/platform/zeebo/crash.cpp
     src/platform/zeebo/hd_textures_stub.cpp
+    src/platform/zeebo/re1_lz4.cpp
+    src/platform/zeebo/re1_archive.cpp
+    src/platform/zeebo/pcm_source.cpp
     src/platform/zeebo/syscalls.cpp
     src/platform/zeebo/stubs.cpp
     src/platform/zeebo/zeebo_mempanel.cpp

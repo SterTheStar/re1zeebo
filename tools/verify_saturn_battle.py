@@ -55,8 +55,7 @@ SAVELOAD_SRC = os.path.join(REPO, 'src', 'game', 'SaveLoadScreen.cpp')
 ROOM_SRC = os.path.join(REPO, 'src', 'game', 'Room.cpp')
 ROOMINIT_SRC = os.path.join(REPO, 'src', 'game', 'RoomInit.cpp')
 SOUND_SRC = os.path.join(REPO, 'src', 'game', 'SoundSystem.cpp')
-VCXPROJ = os.path.join(REPO, 'Game.vcxproj')
-CMAKELISTS = os.path.join(REPO, 'CMakeLists.txt')
+CMAKELISTS = os.path.join(REPO, 'CMakeLists.zeebo.txt')
 
 MODULES = os.path.join(REPO, 'assets', 'SATURN_ISO_CONTENT')
 BATTLE_CDP = os.path.join(MODULES, 'SND', 'BATTLE.CDP')
@@ -1361,26 +1360,14 @@ def check_gating():
 
 def check_build_files():
     print('build wiring')
-    vcx = open(VCXPROJ, encoding='utf-8', errors='replace').read()
-    sources = re.findall(r'<ClCompile Include="([^"]+)"', vcx)
+    # The PC/Windows and Linux builds were removed: CMakeLists.zeebo.txt is the
+    # only live source list. The MSVC basename collision trap no longer applies.
+    cml = open(CMAKELISTS, encoding='utf-8', errors='replace').read()
+    sources = re.findall(r'^\s*(\S+\.(?:cpp|S))\s*$', cml, re.M)
     check(any(s.replace('\\', '/') == 'src/game/saturn/SaturnBattle.cpp'
               for s in sources),
-          'Game.vcxproj lists src/game/saturn/SaturnBattle.cpp')
-    by_name = {}
-    for s in sources:
-        by_name.setdefault(os.path.basename(s), []).append(s)
-    dupes = {n: v for n, v in by_name.items() if len(v) > 1}
-    if dupes:
-        for name, group in sorted(dupes.items()):
-            fail('%s.cpp basename collides in Game.vcxproj: %s - they share one'
-                 ' .obj and one overwrites the other'
-                 % (name, ', '.join(group)))
-    else:
-        ok('all %d Game.vcxproj sources have distinct basenames' % len(sources))
-
-    cml = open(CMAKELISTS, encoding='utf-8', errors='replace').read()
-    check('src/game/saturn/SaturnBattle.cpp' in cml,
-          'CMakeLists.txt lists src/game/saturn/SaturnBattle.cpp')
+          'CMakeLists.zeebo.txt lists src/game/saturn/SaturnBattle.cpp')
+    ok('CMakeLists.zeebo.txt lists %d translation units' % len(sources))
 
 
 def check_arena_rooms():

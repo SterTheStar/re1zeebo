@@ -1,6 +1,6 @@
 // MarniDX_GLES1.cpp - OpenGL ES 1.0/1.1 fixed-function backend for Zeebo.
 //
-// Counterpart of MarniDX.cpp (D3D11) and MarniDX_GL.cpp (GL 3.3 Core).
+// Zeebo counterpart of the old PC D3D11/GL backends (both builds removed).
 // Targets Zeebo's Adreno 130 GPU (OpenGL ES 1.0/1.1, no shaders, no VAOs)
 // through BREW's IEGL and standard GLES1 entry points.
 #include "MarniDX.h"
@@ -125,43 +125,45 @@ void UnpackColor(DWORD color, float* r, float* g, float* b, float* a)
     *b = (float)((color >>  0) & 0xFF) / 255.0f;
 }
 
-uint8_t* ConvertToRGBA8888(int width, int height, int bpp, const void* src)
+// Texturas ficam em RGBA5551 (16 bits) na VRAM compartilhada da Adreno 130:
+// metade do consumo de RAM das texturas, mantendo o bit de alpha que o jogo
+// usa como color-key (transparente/opaco).
+static uint16_t* ConvertToTexture16(int width, int height, int bpp, const void* src)
 {
     if (!src || width <= 0 || height <= 0) {
         return NULL;
     }
     size_t count = (size_t)width * (size_t)height;
-    uint8_t* dst = (uint8_t*)malloc(count * 4);
+    uint16_t* dst = (uint16_t*)malloc(count * 2);
     if (!dst) {
         return NULL;
     }
 
     const uint8_t* in8 = (const uint8_t*)src;
     if (bpp == 32) {
-        // 32-bit input is already RGBA (R in lowest byte), matching MarniDX_GL.cpp.
-        memcpy(dst, in8, count * 4);
+        for (size_t i = 0; i < count; ++i) {
+            uint16_t r = (uint16_t)((in8[i * 4 + 0] >> 3) & 0x1Fu);
+            uint16_t g = (uint16_t)((in8[i * 4 + 1] >> 3) & 0x1Fu);
+            uint16_t b = (uint16_t)((in8[i * 4 + 2] >> 3) & 0x1Fu);
+            uint16_t a = (in8[i * 4 + 3] >= 128u) ? 1u : 0u;
+            dst[i] = (uint16_t)((r << 11) | (g << 6) | (b << 1) | a);
+        }
     } else if (bpp == 24) {
         for (size_t i = 0; i < count; ++i) {
-            dst[i * 4 + 0] = in8[i * 3 + 2];
-            dst[i * 4 + 1] = in8[i * 3 + 1];
-            dst[i * 4 + 2] = in8[i * 3 + 0];
-            dst[i * 4 + 3] = 255;
+            uint16_t r = (uint16_t)((in8[i * 3 + 2] >> 3) & 0x1Fu);
+            uint16_t g = (uint16_t)((in8[i * 3 + 1] >> 3) & 0x1Fu);
+            uint16_t b = (uint16_t)((in8[i * 3 + 0] >> 3) & 0x1Fu);
+            dst[i] = (uint16_t)((r << 11) | (g << 6) | (b << 1) | 1u);
         }
     } else if (bpp == 16) {
         const uint16_t* in16 = (const uint16_t*)src;
         for (size_t i = 0; i < count; ++i) {
             uint16_t p = in16[i];
-            uint8_t r = (uint8_t)(((p >> 10) & 0x1F) << 3);
-            uint8_t g = (uint8_t)(((p >>  5) & 0x1F) << 3);
-            uint8_t b = (uint8_t)(((p >>  0) & 0x1F) << 3);
-            uint8_t a = (p == 0) ? 0 : 255;
-            dst[i * 4 + 0] = r;
-            dst[i * 4 + 1] = g;
-            dst[i * 4 + 2] = b;
-            dst[i * 4 + 3] = a;
+            uint16_t a = (p == 0u) ? 0u : 1u; /* color-key do PSX */
+            dst[i] = (uint16_t)((p & 0xFFFEu) | a);
         }
     } else {
-        memset(dst, 255, count * 4);
+        for (size_t i = 0; i < count; ++i) dst[i] = 0xFFFFu;
     }
     return dst;
 }
@@ -602,10 +604,10 @@ MarniHandle MarniDX::CreateTexture(int width, int height, int bpp, const void* p
     glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_MIN_FILTER, GLES1_NEAREST);
     glTexParameteri(GLES1_TEXTURE_2D, GLES1_TEXTURE_MAG_FILTER, GLES1_NEAREST);
 
-    uint8_t* rgba = ConvertToRGBA8888(width, height, bpp, pixelData);
+    uint16_t* texels = ConvertToTexture16(width, height, bpp, pixelData);
     glTexImage2D(GLES1_TEXTURE_2D, 0, GLES1_RGBA, width, height, 0,
-                 GLES1_RGBA, GLES1_UNSIGNED_BYTE, rgba);
-    free(rgba);
+                 GLES1_RGBA, GLES1_UNSIGNED_SHORT_5_5_5_1, texels);
+    free(texels);
 
     m_pImpl->slots[slot].tex = glTex;
     m_pImpl->slots[slot].w   = width;
@@ -631,16 +633,16 @@ BOOL MarniDX::UpdateTexturePixels(MarniHandle tex, const void* pixelData,
     }
     if (m_pImpl->slots[tex].tex == 0) return FALSE;
 
-    uint8_t* rgba = ConvertToRGBA8888(width, height, bpp, pixelData);
-    if (!rgba) return FALSE;
+    uint16_t* texels = ConvertToTexture16(width, height, bpp, pixelData);
+    if (!texels) return FALSE;
 
     if (m_pImpl->boundGlTex != m_pImpl->slots[tex].tex) {
         glBindTexture(GLES1_TEXTURE_2D, m_pImpl->slots[tex].tex);
         m_pImpl->boundGlTex = m_pImpl->slots[tex].tex;
     }
     glTexSubImage2D(GLES1_TEXTURE_2D, 0, 0, 0, width, height,
-                    GLES1_RGBA, GLES1_UNSIGNED_BYTE, rgba);
-    free(rgba);
+                    GLES1_RGBA, GLES1_UNSIGNED_SHORT_5_5_5_1, texels);
+    free(texels);
     return TRUE;
 }
 
@@ -655,15 +657,18 @@ BOOL MarniDX::ReplaceTexture(MarniHandle tex, int width, int height, const void*
         glBindTexture(GLES1_TEXTURE_2D, m_pImpl->slots[tex].tex);
         m_pImpl->boundGlTex = m_pImpl->slots[tex].tex;
     }
+    uint16_t* texels = ConvertToTexture16(width, height, 32, rgba32);
+    if (!texels) return FALSE;
     if (m_pImpl->slots[tex].w == width && m_pImpl->slots[tex].h == height) {
         glTexSubImage2D(GLES1_TEXTURE_2D, 0, 0, 0, width, height,
-                        GLES1_RGBA, GLES1_UNSIGNED_BYTE, rgba32);
+                        GLES1_RGBA, GLES1_UNSIGNED_SHORT_5_5_5_1, texels);
     } else {
         glTexImage2D(GLES1_TEXTURE_2D, 0, GLES1_RGBA, width, height, 0,
-                     GLES1_RGBA, GLES1_UNSIGNED_BYTE, rgba32);
+                     GLES1_RGBA, GLES1_UNSIGNED_SHORT_5_5_5_1, texels);
         m_pImpl->slots[tex].w = width;
         m_pImpl->slots[tex].h = height;
     }
+    free(texels);
     return TRUE;
 }
 

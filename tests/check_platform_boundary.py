@@ -1,4 +1,4 @@
-"""Enforce the Phase 0 platform boundary (docs/LINUX_PORT.md).
+"""Enforce the platform boundary (see AGENTS.md, "Regras de código").
 
 src/game/ must stay OS-agnostic: no Windows headers, no live Win32 API calls.
 Comments are exempt -- this project deliberately documents the original
@@ -77,7 +77,7 @@ def main():
         for v in violations:
             print('  ' + v)
         print('\nOS services belong behind src/platform/platform.h -- see '
-              'docs/LINUX_PORT.md Phase 0.')
+              'AGENTS.md.')
         return 1
     print('Platform boundary OK: %s has no Windows headers or Win32 calls.' % root)
     return 0

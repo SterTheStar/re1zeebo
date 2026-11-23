@@ -15,8 +15,8 @@ What it proves, from the files the port was written from:
   * the instructions the port's constants come from: `cmp/eq #85` on the
     player's +0x8A in the variant roll, the 0x0A0 turn trim and 0x4800 target in
     the stab are read as literals out of GAME2;
-  * both build files list the new sources, there is no basename collision in
-    Game.vcxproj, and every hook in the PC code is behind g_bSaturnMode.
+  * CMakeLists.zeebo.txt lists the new sources and every hook in the shared
+    game code is behind g_bSaturnMode.
 
 Run from the repo root:  python tools/verify_saturn_tick.py
 """
@@ -375,14 +375,10 @@ def main():
     check(r.returncode == 0, "SaturnTickAnim.cpp is current: " + r.stdout.strip())
 
     print("build files")
-    for f in ("Game.vcxproj", "CMakeLists.txt"):
-        t = open(f, encoding="utf-8-sig").read()
-        for n in ("SaturnTick.cpp", "SaturnTickAnim.cpp"):
-            check(n in t, "%s lists %s" % (f, n))
-    t = open("Game.vcxproj", encoding="utf-8-sig").read()
-    bases = re.findall(r'ClCompile Include="[^"]*[\\/]([^\\/"]+)\.cpp"', t)
-    dup = sorted({b for b in bases if bases.count(b) > 1})
-    check(not dup, "no basename collision in Game.vcxproj" + (" (%s)" % dup if dup else ""))
+    # The PC/Windows build is gone; CMakeLists.zeebo.txt is the only live list.
+    t = open("CMakeLists.zeebo.txt", encoding="utf-8-sig").read()
+    for n in ("SaturnTick.cpp", "SaturnTickAnim.cpp"):
+        check(n in t, "CMakeLists.zeebo.txt lists %s" % n)
 
     print("gating")
     for f, pats in (

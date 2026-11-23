@@ -36,6 +36,5 @@ void      AviDemux_Rewind(AviDemux* avi);
 // internal buffer valid until next call). Returns 1 on success, 0 on EOF.
 int       AviDemux_NextVideoFrame(AviDemux* avi, const uint8_t** outData, uint32_t* outSize);
 
-// Extract interleaved PCM audio ('01wb') starting at fromMs into a newly
-// malloc'd RIFF/WAVE buffer. Caller must free(*outWav). Returns 1 on success.
-int       AviDemux_ExtractWav(AviDemux* avi, int fromMs, uint8_t** outWav, uint32_t* outSize);
+// Sem AviDemux_ExtractWav: o audio dos FMVs vem via <FILME>.AUDIO + ISource.
+// Montar o WAV PCM inteiro (~20 MB) estouraria os 32 MB de RAM do Zeebo.

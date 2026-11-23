@@ -5,7 +5,7 @@
 Port nativo de **Resident Evil 1 (PC)** para **Zeebo (Qualcomm BREW 4.0.2)**
 
 ![Platform](https://img.shields.io/badge/Plataforma-Zeebo%20(BREW%204.0.2)-0066cc?style=flat-square)
-![Arch](https://img.shields.io/badge/CPU-ARMv6K%20%2B%20VFPv2-1f6feb?style=flat-square)
+![Arch](https://img.shields.io/badge/CPU-ARMv6K%20soft--float-1f6feb?style=flat-square)
 ![Graphics](https://img.shields.io/badge/GPU-OpenGL%20ES%201.1-2ea44f?style=flat-square)
 ![Release](https://img.shields.io/badge/Release-v1.0-d73a49?style=flat-square)
 
@@ -21,7 +21,7 @@ Port não oficial, gratuito e de código aberto desenvolvido por **Esther** ([pa
 | :--- | :--- |
 | **Sistema (BREW 4.0.2)** | Ciclo `IApplet`, timer em 30 fps, heap/I/O via `pfnMalloc` e `IFileMgr`, troca de contexto ARMv6 (`TaskScheduler_arm.S`) |
 | **Gráficos (GLES 1.1)** | Contexto EGL `RGB565` + `DEPTH16` em `640x480`, texturas TIM em `RGBA8888`, perspectiva 3D com `w` e depth test |
-| **Desempenho** | Build `-O2` com hardware VFPv2 (`softfp`), cache de estado GLES1 e buffers reutilizáveis para modelos 3D |
+| **Desempenho** | Build `-O2` com soft-float puro (`-mfloat-abi=soft`, **sem VFP/VFPv2**), cache de estado GLES1 e buffers reutilizáveis para modelos 3D |
 | **Cutscenes (FMV)** | Demuxer AVI em streaming, decodificador Cinepak e faixa de áudio PCM reproduzida via `IMedia` |
 | **Áudio e Controles** | Bancos WAV via `IMediaUtil` e suporte nativo ao Z-Pad via `IHID` (com fallback de teclado via `EVT_KEY`) |
 
@@ -29,15 +29,25 @@ Port não oficial, gratuito e de código aberto desenvolvido por **Esther** ([pa
 
 ## Como preparar os assets
 
-Você precisa dos arquivos da versão de PC (por exemplo, a edição da **GOG**). Localize a pasta **`USA/`** da instalação original e coloque-a dentro da pasta do módulo ao lado de `re1zeebo.mod` e `re1zeebo.mif`.
+O pacote **oficial** já está pronto em **`dist/zeebo_sd/`** e tem apenas
+**3 arquivos**:
 
-Estrutura final da pasta descompactada (ex.: `re1zeebo/`): `re1zeebo.mod`, `re1zeebo.mif` e a pasta `USA/` (com `data/`, `enemy/`, `movie/`, `sound/`, `stage1/`..`stage5/`, etc.).
-
-Para montar a pasta automaticamente após compilar:
-
-```powershell
-python tools/zeebo/package_mod.py --mod build/zeebo/re1zeebo.mod --assets "C:\GOG Games\Resident Evil\USA" --out-dir dist/zeebo/re1zeebo
 ```
+mif/990001.mif
+mod/990001/990001.mod
+mod/990001/RE1DATA.PAK      <- 2935 arquivos do jogo em arquivo unico
+```
+
+São **352 MB** em vez de 598 MB. Os dados vêm em LZ4 e o áudio em ADPCM 4-bit;
+o módulo descompacta tudo transparentemente na leitura. O áudio é tocado em
+**streaming** direto do PAK (`ISource` + `AEECLSID_MEDIAPCM`), então nem o PCM
+dos filmes nem os bancos de som ficam inteiros na RAM — só ~8 KB por voz.
+Basta copiar a pasta para o SD (ou carregar no Zeebx). `config.ini`, saves e
+logs continuam soltos.
+
+Os arquivos crus do PC não são mais incluídos no repositório. Se precisar
+regerar, copie `USA/` de uma instalação GOG/retail para uma pasta temporária
+e siga `AGENTS.md` §18 (que inclui a geração do `RE1DATA.PAK`).
 
 ---
 
@@ -50,7 +60,9 @@ cmake -S . -B build/zeebo -G Ninja -DZEEBO=ON -DCMAKE_TOOLCHAIN_FILE=cmake/zeebo
 cmake --build build/zeebo -j 8
 ```
 
-O binário final será gerado em `build/zeebo/re1zeebo.mod`. Depois de copiar a pasta `USA/` para `dist/zeebo/re1zeebo/`, basta carregar a pasta no **Zeebx** ou no console.
+O binário final será gerado em `build/zeebo/re1zeebo.mod`. Para rodar, use o
+pacote oficial **`dist/zeebo_sd/`** (que já tem o `.mod` e o `RE1DATA.PAK`) no
+**Zeebx** ou no console. O `.mod` sozinho, sem o PAK, não é suficiente.
 
 ---
 

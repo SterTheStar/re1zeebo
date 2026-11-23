@@ -4,6 +4,8 @@
 // allocation for TaskScheduler, and debug logging for Zeebo.
 #include "../platform.h"
 #include "zeebo_brew.h"
+#include "re1_lz4.h"
+#include "re1_archive.h"
 #include "../../Globals.h"
 
 #include <stdarg.h>
@@ -138,7 +140,35 @@ void* plat_file_read_all(const char* path, size_t* outSize)
     if (outSize) {
         *outSize = 0;
     }
-    if (!path || !g_Zeebo.pFileMgr) {
+    if (!path) {
+        return NULL;
+    }
+
+    // Pacote unico R1PA: a entrada ja vem com R1LZ, basta inflar.
+    if (RE1Arc_IsOpen()) {
+        RE1ArcFile vf;
+        if (RE1Arc_OpenFile(path, &vf)) {
+            size_t packedSize = RE1Arc_Size(&vf);
+            uint8_t* packed = (uint8_t*)malloc(packedSize + 16u);
+            if (!packed || !RE1Arc_Read(&vf, packed, packedSize)) {
+                free(packed);
+                return NULL;
+            }
+            void* out = packed;
+            size_t outLen = packedSize;
+            int rc = RE1LZ_Unpack(packed, outLen, &out, &outLen);
+            if (rc < 0) {
+                Zeebo_Log("[R1LZ] dado corrompido no PAK: %s\n", path);
+                free(packed);
+                return NULL;
+            }
+            if (rc == 1) free(packed);
+            if (outSize) *outSize = outLen;
+            return out;
+        }
+    }
+
+    if (!g_Zeebo.pFileMgr) {
         return NULL;
     }
 
@@ -175,10 +205,24 @@ void* plat_file_read_all(const char* path, size_t* outSize)
     }
     f->pvt->Release(f);
 
-    if (outSize) {
-        *outSize = (size_t)totalRead;
+    // Arquivos do pacote compactado usam o mesmo nome, mas o conteudo vem
+    // embrulhado no formato R1LZ. O chamador continua recebendo os bytes
+    // originais, exatamente como acontecia com o arquivo nao compactado.
+    void* unpacked = buf;
+    size_t unpackedSize = (size_t)totalRead;
+    int rc = RE1LZ_Unpack(buf, unpackedSize, &unpacked, &unpackedSize);
+    if (rc < 0) {
+        Zeebo_Log("[R1LZ] dado corrompido: %s\n", norm);
+        free(buf);
+        if (outSize) *outSize = 0;
+        return NULL;
     }
-    return buf;
+    if (rc == 1) free(buf);
+
+    if (outSize) {
+        *outSize = unpackedSize;
+    }
+    return unpacked;
 }
 
 unsigned int plat_file_mtime(const char* path)

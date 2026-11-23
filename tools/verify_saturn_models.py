@@ -22,13 +22,13 @@ build wiring that keeps them from being silently dropped:
    narrower, since either error is invisible in the campaign and wrong in the
    Battle Game.
 
-3. **The wiring.** Both build systems must list the file, every call site must
-   be gated on g_bSaturnMode so OG and DC can never reach it, and no two sources
-   in Game.vcxproj may share a basename. That last one is not hypothetical: MSVC
-   derives object names from the basename alone, so `dc/EntityModels.cpp` and
-   `saturn/EntityModels.cpp` both produced `obj/Release/EntityModels.obj`,
-   MSB8027 warned, the Saturn object silently overwrote the DC one, and the link
-   failed with four missing `dc_*` symbols. It is why the file is SaturnModels.*.
+3. **The wiring.** CMakeLists.zeebo.txt must list the file and every call site
+   must be gated on g_bSaturnMode so OG and DC can never reach it. Historically
+   the Windows build also required unique source basenames: MSVC derived object
+   names from the basename alone, so `dc/EntityModels.cpp` and
+   `saturn/EntityModels.cpp` both produced `EntityModels.obj`, MSB8027 warned,
+   one overwrote the other and the link failed with four missing `dc_*`
+   symbols. That build is gone; the `SaturnModels.*` name stayed.
 
 Everything is local - no Ghidra bridge and no disc image needed, because the
 Saturn values are transcribed constants rather than something read live.
@@ -45,8 +45,7 @@ LOADER = os.path.join(REPO, 'src', 'game', 'EntityModelLoader.cpp')
 SATURN_SRC = os.path.join(REPO, 'src', 'game', 'saturn', 'SaturnModels.cpp')
 SATURN_HDR = os.path.join(REPO, 'src', 'game', 'saturn', 'SaturnModels.h')
 SATURN_ENEMY = os.path.join(REPO, 'assets', 'SATURN', 'Enemy')
-VCXPROJ = os.path.join(REPO, 'Game.vcxproj')
-CMAKELISTS = os.path.join(REPO, 'CMakeLists.txt')
+CMAKELISTS = os.path.join(REPO, 'CMakeLists.zeebo.txt')
 
 BLOCK_ENTRIES = 53
 # Rows the port appends after the two character blocks: the bonus outfits
@@ -242,32 +241,13 @@ def check_wiring(loader_src):
 
 
 def check_build_files():
-    for path, needle, label in (
-            (VCXPROJ, 'src\\game\\saturn\\SaturnModels.cpp', 'Game.vcxproj'),
-            (CMAKELISTS, 'src/game/saturn/SaturnModels.cpp', 'CMakeLists.txt')):
-        text = open(path, encoding='utf-8', errors='replace').read()
-        check(needle in text, '%s lists src/game/saturn/SaturnModels.cpp' % label)
-
-    # The MSB8027 trap: MSVC names objects after the BASENAME, so two sources
-    # with one basename share an .obj and one silently overwrites the other.
-    # See the header of src/game/saturn/SaturnModels.h.
-    vcx = open(VCXPROJ, encoding='utf-8', errors='replace').read()
-    sources = re.findall(r'<ClCompile Include="([^"]+)"', vcx)
-    by_name = {}
-    for s in sources:
-        by_name.setdefault(os.path.basename(s), []).append(s)
-    dupes = {n: v for n, v in by_name.items() if len(v) > 1}
-    if dupes:
-        for name, group in sorted(dupes.items()):
-            fail('%s.cpp basename collides in Game.vcxproj: %s - they share one'
-                 ' .obj and one overwrites the other'
-                 % (name, ', '.join(group)))
-    else:
-        ok('all %d Game.vcxproj sources have distinct basenames' % len(sources))
-
+    # Only the Zeebo build remains. The MSVC basename trap (MSB8027) that
+    # motivated the SaturnModels.* rename is gone with the Windows build.
     cml = open(CMAKELISTS, encoding='utf-8', errors='replace').read()
-    cml_sources = re.findall(r'^\s*(\S+\.cpp)\s*$', cml, re.M)
-    print('   and CMakeLists lists %d sources' % len(cml_sources))
+    check('src/game/saturn/SaturnModels.cpp' in cml,
+          'CMakeLists.zeebo.txt lists src/game/saturn/SaturnModels.cpp')
+    cml_sources = re.findall(r'^\s*(\S+\.(?:cpp|S))\s*$', cml, re.M)
+    print('   and CMakeLists.zeebo.txt lists %d sources' % len(cml_sources))
 
 
 def check_overlay_files(saturn_src):

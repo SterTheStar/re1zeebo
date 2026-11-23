@@ -52,6 +52,11 @@ typedef uint8_t  boolean;
 #define AEECLSID_GL              0x01014BC3u
 #define AEECLSID_GLES11          0x0103D8EBu
 #define AEEIID_IDIB              0x01001045u
+// Streaming de PCM cru via ISource (BREW 4.0.2 AEEClassIDs.h / AEEISource.h)
+#define AEECLSID_SOURCEUTIL      0x01000011u
+#define AEECLSID_MEDIAPCM        0x01005511u
+#define AEEIID_ISOURCE           0x01001012u
+#define MMD_ISOURCE              AEEIID_ISOURCE
 
 // Application Class ID for Resident Evil 1 Zeebo port (custom homebrew range)
 #define AEECLSID_RE1_ZEEBO       0x01099001u
@@ -110,6 +115,7 @@ typedef struct IHIDDevice IHIDDevice;
 typedef struct ISound    ISound;
 typedef struct IMediaUtil IMediaUtil;
 typedef struct IMedia     IMedia;
+typedef struct ISource    ISource;
 
 typedef void (*PFNNOTIFY)(void* pUser);
 
@@ -521,6 +527,49 @@ typedef struct IMediaVtbl {
 struct IMedia {
     const IMediaVtbl* pvt;
 };
+
+// ISource (AEEISource.h): 5 slots. Os retornos de Read seguem ISOURCE_*.
+#define ISOURCE_END    0
+#define ISOURCE_ERROR (-1)
+#define ISOURCE_WAIT  (-2)
+
+typedef struct ISourceVtbl {
+    uint32_t (*AddRef)(ISource* po);
+    uint32_t (*Release)(ISource* po);
+    int      (*QueryInterface)(ISource* po, AEEIID id, void** ppNew);
+    int32_t  (*Read)(ISource* po, char* pBuf, int32_t cbBuf);
+    void     (*Readable)(ISource* po, void* pcb);
+} ISourceVtbl;
+
+struct ISource {
+    const ISourceVtbl* pvt;
+};
+
+// AEEMediaFormats.h: spec de PCM cru para AEECLSID_MEDIAPCM.
+typedef struct AEEMediaWaveSpec {
+    uint16_t  wSize;
+    AEECLSID  clsMedia;
+    uint16_t  wChannels;
+    uint32_t  dwSamplesPerSec;
+    uint16_t  wBitsPerSample;
+    unsigned  bUnsigned : 1;
+    uint32_t  dwBytesPerSec;
+    uint16_t  wBlockSize;
+    uint32_t  dwExtra;
+} AEEMediaWaveSpec;
+
+// AEEMediaDataEx (AEEIMedia.h): basta para SetMediaParm(MM_PARM_MEDIA_DATA).
+typedef struct AEEMediaDataEx {
+    AEECLSID  clsData;
+    void*     pData;
+    uint32_t  dwSize;
+    uint32_t  dwStructSize;
+    uint32_t  dwCaps;
+    unsigned  bRaw : 1;
+    void*     pSpec;
+    uint32_t  dwSpecSize;
+    uint32_t  dwBufferSize;
+} AEEMediaDataEx;
 
 // ---------------------------------------------------------------------------
 // Global Zeebo BREW runtime context (owned by zeebo_brew.cpp)

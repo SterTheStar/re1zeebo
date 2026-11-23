@@ -1,6 +1,6 @@
 // platform.h - the OS services the game calls.
 //
-// This is the boundary described in docs/LINUX_PORT.md Phase 0. Game code
+// This is the boundary described in AGENTS.md ("Regras de código"). Game code
 // (src/game/) and the Marni layer call these functions; each OS provides an
 // implementation under src/platform/<os>/. Nothing here exposes an OS type
 // beyond the opaque handles in types.h, so a new platform is a new directory,

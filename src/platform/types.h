@@ -5,7 +5,7 @@
 // names and the MSVC safe-CRT calls they use. On Windows it is a thin wrapper
 // over <windows.h>, so the MSVC build sees exactly the types it always did.
 //
-// Rule (see docs/LINUX_PORT.md, Phase 0): code under src/game/ includes this
+// Rule (see AGENTS.md): code under src/game/ includes this
 // header, never <windows.h> directly. OS *services* (keyboard, time, files,
 // dialogs) live behind src/platform/platform.h; this file is types only.
 //

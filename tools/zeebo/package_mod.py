@@ -89,6 +89,7 @@ def main() -> None:
     )
     parser.add_argument("--mod", required=True, help="Path to compiled re1zeebo.mod")
     parser.add_argument("--assets", default="", help="Path to GOG/RE1 USA folder (e.g. C:\\GOG Games\\Resident Evil\\USA)")
+    parser.add_argument("--pak", default="", help="Single RE1DATA.PAK to ship instead of loose USA/ files")
     parser.add_argument("--out-dir", default="dist/zeebo_sd", help="Output root directory")
     parser.add_argument("--app-id", default="990001", help="Zeebo numeric module/folder ID (e.g. 990001)")
     parser.add_argument("--app-name", default="Resident Evil", help="Display name in BREW AppMgr")
@@ -112,8 +113,12 @@ def main() -> None:
         shutil.copy2(args.mod, mod_dst)
         with open(mif_dst, "wb") as f:
             f.write(mif_bytes)
-        copied = _copy_assets(args.assets, mod_dir)
-        print(f"Prepared Zeebo SD package at {out_dir} (mif={mif_dst}, mod={mod_dst}, assets={copied} files, clsid=0x{clsid:08X})")
+        if args.pak:
+            shutil.copy2(args.pak, os.path.join(mod_dir, "RE1DATA.PAK"))
+            copied = "PAK"
+        else:
+            copied = _copy_assets(args.assets, mod_dir)
+        print(f"Prepared Zeebo SD package at {out_dir} (mif={mif_dst}, mod={mod_dst}, assets={copied}, clsid=0x{clsid:08X})")
     else:
         os.makedirs(out_dir, exist_ok=True)
         mod_dst = os.path.join(out_dir, f"{args.app_id}.mod")
@@ -121,8 +126,12 @@ def main() -> None:
         shutil.copy2(args.mod, mod_dst)
         with open(mif_dst, "wb") as f:
             f.write(mif_bytes)
-        copied = _copy_assets(args.assets, out_dir)
-        print(f"Prepared flat package at {out_dir} (mod={mod_dst}, mif={mif_dst}, assets={copied} files, clsid=0x{clsid:08X})")
+        if args.pak:
+            shutil.copy2(args.pak, os.path.join(out_dir, "RE1DATA.PAK"))
+            copied = "PAK"
+        else:
+            copied = _copy_assets(args.assets, out_dir)
+        print(f"Prepared flat package at {out_dir} (mod={mod_dst}, mif={mif_dst}, assets={copied}, clsid=0x{clsid:08X})")
 
 
 if __name__ == "__main__":
