@@ -605,6 +605,14 @@ void FlushTmdObjects(void)
             // First normal (flat-shaded primitives only fill vertex 0)
             float flatN[3] = { vbuf[3], vbuf[4], vbuf[5] };
 
+            // Cache de iluminacao por normal: modelos PS1 tem poucos normais
+            // distintos (faces planas). Sem isso TmdComputeLight roda ~30
+            // operacoes soft-float por vertice. Por objeto (M/luz mudam).
+            struct TmdLightKey { float x, y, z, r, g, b; };
+            static TmdLightKey lightKeys[64];
+            int lightKeyCount = 0;
+            bool lightCacheFull = false;
+
             for (int v = 0; v < vtxCount; v++) {
                 const float* vtx = vbuf + v * 11;
                 float x = vtx[0], y = vtx[1], z = vtx[2];
@@ -659,7 +667,29 @@ void FlushTmdObjects(void)
                     // the first vertex's normal.
                     const float* n = vtx + 3;
                     if (n[0] == 0.0f && n[1] == 0.0f && n[2] == 0.0f) n = flatN;
-                    TmdComputeLight(&g_tmdLight[i], n, M, &cr[v], &cg[v], &cb[v]);
+                    bool litCached = false;
+                    if (!lightCacheFull) {
+                        for (int c = 0; c < lightKeyCount; ++c) {
+                            const TmdLightKey* k = &lightKeys[c];
+                            if (k->x == n[0] && k->y == n[1] && k->z == n[2]) {
+                                cr[v] = k->r; cg[v] = k->g; cb[v] = k->b;
+                                litCached = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!litCached) {
+                        TmdComputeLight(&g_tmdLight[i], n, M, &cr[v], &cg[v], &cb[v]);
+                        if (!lightCacheFull) {
+                            if (lightKeyCount < 64) {
+                                TmdLightKey* k = &lightKeys[lightKeyCount++];
+                                k->x = n[0]; k->y = n[1]; k->z = n[2];
+                                k->r = cr[v]; k->g = cg[v]; k->b = cb[v];
+                            } else {
+                                lightCacheFull = true;
+                            }
+                        }
+                    }
                     cr[v] *= vtx[6]; cg[v] *= vtx[7]; cb[v] *= vtx[8];
                     // The original multiplies the lit colour by the object's
                     // colour scale before the 0..255 clamp: 0x00447169
