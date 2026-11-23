@@ -23,6 +23,10 @@
 #include "../system/AssetPath.h"
 #include "saturn/SaturnRoomObjects.h"
 #include "saturn/SaturnBattle.h"
+#ifdef __ZEEBO__
+#include "../platform/platform.h"
+#include "../platform/zeebo/zeebo_mempanel.h"
+#endif
 #include "saturn/SaturnTyrant.h"
 #include "GameOptions.h"
 
@@ -301,6 +305,9 @@ LAB_00480e89:
                 // 0x00480e89-0x00480ebd: Update entities and player
                 // Debug menu open: pause entity/enemy updates while it is up.
                 // g_debugMenuOpen stays 0 while debug features are disabled.
+#ifdef __ZEEBO__
+                uint32_t entProfStart = plat_time_ms();
+#endif
                 if (g_debugMenuOpen == 0) {
                     update_entities();
                 }
@@ -365,6 +372,9 @@ LAB_00480e89:
                     if (g_dwEntityRenderEnabled != 0) {
                         render_entity((Entity*)&g_playerEntity);
                     }
+#ifdef __ZEEBO__
+                    ZeeboMemPanel::g_profEntMs = plat_time_ms() - entProfStart;
+#endif
 
                     // 0x00480f6e-0x00480f70: 2D effects and room sprites
                     update_2d_effects();

@@ -26,11 +26,16 @@
 #define GLES1_SCISSOR_TEST            0x0C11
 
 #define GLES1_LEQUAL                  0x0203
+#define GLES1_BACK                    0x0405
+#define GLES1_CW                      0x0900
+#define GLES1_CCW                     0x0901
 
 #define GLES1_UNSIGNED_BYTE           0x1401
+#define GLES1_UNSIGNED_SHORT          0x1403
 // 0x8033 e' GL_UNSIGNED_SHORT_4_4_4_4; 5_5_5_1 e' 0x8034 (gl.h do BREW).
 #define GLES1_UNSIGNED_SHORT_5_5_5_1  0x8034
 #define GLES1_FLOAT                   0x1406
+#define GLES1_FIXED                   0x140C
 
 #define GLES1_RGBA                    0x1908
 

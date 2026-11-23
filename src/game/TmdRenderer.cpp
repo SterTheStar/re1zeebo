@@ -45,6 +45,10 @@ extern void FUN_00483580(int* joint, MATRIX* out);          // 0x00483580 item_v
 #include <algorithm>
 #include <cmath>
 #include "../DebugPrint.h"
+#ifdef __ZEEBO__
+#include "../platform/platform.h"
+#include "../platform/zeebo/zeebo_mempanel.h"
+#endif
 
 // ============================================================================
 // Tuning constants for the projection. The original DX5 renderer projected
@@ -200,11 +204,11 @@ void TmdQueueObject(void* objData, int depth)
     // fact about what the cleanup destroys rather than about what is
     // addressable. Tying those two together is what broke the door animation.
     static const struct { BYTE* base; size_t size; } kSlotRegions[] = {
-        { g_renderStateTMD,     sizeof(g_renderStateTMD)     },  // item examine / render state
+        { g_tmdObjectBuffer,    sizeof(g_tmdObjectBuffer)    },  // entities, room objects (most common)
         { g_doorTmdSlotBuffer,  sizeof(g_doorTmdSlotBuffer)  },  // door animation
         { g_itemTmdSlotBuffer,  sizeof(g_itemTmdSlotBuffer)  },  // item viewer
         { g_itemSharedTmdSlot,  sizeof(g_itemSharedTmdSlot)  },  // item viewer, shared transparent
-        { g_tmdObjectBuffer,    sizeof(g_tmdObjectBuffer)    },  // entities, room objects
+        { g_renderStateTMD,     sizeof(g_renderStateTMD)     },  // item examine / render state
     };
 
     BYTE* slotBase = NULL;
@@ -292,49 +296,244 @@ void TmdQueueComplexObject(void* objData, void* elem, int depth)
 // from identity (it only leans by the subpixel offset), so the light directions
 // are used in GTE camera space as-is: both the normals and the light vectors go
 // through the same camera rotation, and a rotation preserves the dot product.
-// A previous revision negated X and Z here to cancel out an incorrect 180 degree
-// view flip in FUN_00486190.
 // ============================================================================
-static void TmdComputeLight(const TmdLightState* ls, const float* n, const float* rot,
-                            float* outR, float* outG, float* outB)
-{
-    // Normal into view space (rotation part of the objData matrix)
-    float nx = rot[0] * n[0] + rot[4] * n[1] + rot[8]  * n[2];
-    float ny = rot[1] * n[0] + rot[5] * n[1] + rot[9]  * n[2];
-    float nz = rot[2] * n[0] + rot[6] * n[1] + rot[10] * n[2];
+// Fixed-point (Q12) local-space lighting for Zeebo (no FPU).
+// Transforming the 3 light directions into object local space once per object
+// and evaluating dot(N, L) in 32-bit integer arithmetic avoids ~30 soft-float
+// operations per unique normal.
+// ============================================================================
+struct TmdLocalLightsQ12 {
+    int32_t lx[3], ly[3], lz[3];
+    int32_t lr[3], lg[3], lb[3];
+    int32_t ambR, ambG, ambB;
+};
 
-    // Ambient from the latched g_d3dAmbientColor (packed r<<16|g<<8|b, 0..255)
-    // - NOT the live global, see TmdLightState.
-    float r = (float)((ls->ambient >> 16) & 0xFF) / 255.0f;
-    float g = (float)((ls->ambient >> 8)  & 0xFF) / 255.0f;
-    float b = (float)( ls->ambient        & 0xFF) / 255.0f;
+static inline void TmdPrepareLocalLights(const TmdLightState* ls, const float* rot,
+                                         TmdLocalLightsQ12* out)
+{
+    for (int i = 0; i < 3; i++) {
+        float dx = ls->dir[i][0], dy = ls->dir[i][1], dz = ls->dir[i][2];
+        float vx = -(rot[0] * dx + rot[1] * dy + rot[2]  * dz);
+        float vy = -(rot[4] * dx + rot[5] * dy + rot[6]  * dz);
+        float vz = -(rot[8] * dx + rot[9] * dy + rot[10] * dz);
+        out->lx[i] = (int32_t)(vx * 4096.0f);
+        out->ly[i] = (int32_t)(vy * 4096.0f);
+        out->lz[i] = (int32_t)(vz * 4096.0f);
+        out->lr[i] = (int32_t)(ls->col[i][0] * 4096.0f);
+        out->lg[i] = (int32_t)(ls->col[i][1] * 4096.0f);
+        out->lb[i] = (int32_t)(ls->col[i][2] * 4096.0f);
+    }
+    out->ambR = (int32_t)(((ls->ambient >> 16) & 0xFF) * 4096 / 255);
+    out->ambG = (int32_t)(((ls->ambient >> 8)  & 0xFF) * 4096 / 255);
+    out->ambB = (int32_t)(( ls->ambient        & 0xFF) * 4096 / 255);
+}
+
+static inline void TmdEvalLocalLightQ12(const TmdLocalLightsQ12* ll, const float* n,
+                                        int32_t* outRQ12, int32_t* outGQ12, int32_t* outBQ12)
+{
+    int32_t nx = (int32_t)(n[0] * 4096.0f);
+    int32_t ny = (int32_t)(n[1] * 4096.0f);
+    int32_t nz = (int32_t)(n[2] * 4096.0f);
+
+    int32_t r = ll->ambR;
+    int32_t g = ll->ambG;
+    int32_t b = ll->ambB;
 
     for (int i = 0; i < 3; i++) {
-        // L[3..5] = direction, L[6..8] = colour, from the latched copy.
-        const float L[9] = {
-            0.0f, 0.0f, 0.0f,
-            ls->dir[i][0], ls->dir[i][1], ls->dir[i][2],
-            ls->col[i][0], ls->col[i][1], ls->col[i][2],
-        };
-        // SetLightMatrix writes pLight[0] = 2 (D3DLIGHT_DIRECTIONAL) and stores
-        // the normalised light POSITION in the direction field, so [3..5] is a
-        // D3D dvDirection: the direction the light travels. D3D's diffuse term
-        // is dot(N, -dvDirection), hence the negation. Dotting without it lit
-        // only the faces pointing away from the camera - the options-menu lights
-        // all sit just behind the model (z = -780 with the model at z = -700),
-        // so the visible side came out at ambient level (~10%).
-        float d = -(nx * L[3] + ny * L[4] + nz * L[5]);
-        if (d > 0.0f) {
-            r += d * L[6];
-            g += d * L[7];
-            b += d * L[8];
+        int32_t d = (nx * ll->lx[i] + ny * ll->ly[i] + nz * ll->lz[i]) >> 12;
+        if (d > 0) {
+            r += (d * ll->lr[i]) >> 12;
+            g += (d * ll->lg[i]) >> 12;
+            b += (d * ll->lb[i]) >> 12;
         }
     }
 
-    *outR = (r > 1.0f) ? 1.0f : r;
-    *outG = (g > 1.0f) ? 1.0f : g;
-    *outB = (b > 1.0f) ? 1.0f : b;
+    *outRQ12 = (r > 4096) ? 4096 : (r < 0 ? 0 : r);
+    *outGQ12 = (g > 4096) ? 4096 : (g < 0 ? 0 : g);
+    *outBQ12 = (b > 4096) ? 4096 : (b < 0 ? 0 : b);
 }
+
+static inline void TmdEvalLocalLightQ12_Int(const TmdLocalLightsQ12* ll,
+                                            int16_t nx, int16_t ny, int16_t nz,
+                                            int32_t* outRQ12, int32_t* outGQ12, int32_t* outBQ12)
+{
+    int32_t r = ll->ambR;
+    int32_t g = ll->ambG;
+    int32_t b = ll->ambB;
+
+    for (int i = 0; i < 3; i++) {
+        int32_t d = ((int32_t)nx * ll->lx[i] + (int32_t)ny * ll->ly[i] + (int32_t)nz * ll->lz[i]) >> 12;
+        if (d > 0) {
+            r += (d * ll->lr[i]) >> 12;
+            g += (d * ll->lg[i]) >> 12;
+            b += (d * ll->lb[i]) >> 12;
+        }
+    }
+
+    *outRQ12 = (r > 4096) ? 4096 : (r < 0 ? 0 : r);
+    *outGQ12 = (g > 4096) ? 4096 : (g < 0 ? 0 : g);
+    *outBQ12 = (b > 4096) ? 4096 : (b < 0 ? 0 : b);
+}
+
+static inline uint8_t TmdClampByte(float f)
+{
+    int v = (int)(f * 255.0f + 0.5f);
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return (uint8_t)v;
+}
+
+static inline int FindMaskBucket(float d, const unsigned int* maskDepths, int maskCount)
+{
+    int lo = 0, hi = maskCount;
+    while (lo < hi) {
+        int mid = (lo + hi) >> 1;
+        if ((float)maskDepths[mid] > d) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+
+// ============================================================================
+// Per-element fixed-point mesh cache (avoids soft-float vertex reads &
+// quad triangulation every frame). Keyed by (elem, vbuf, ibuf, vtxCount, listCount).
+// ============================================================================
+struct TmdCachedVtx {
+    int16_t x, y, z;
+    int16_t nx, ny, nz;   // Q12
+    int32_t u, v;         // Q16.16 GLfixed
+    uint8_t r, g, b, hasColor;
+};
+
+struct TmdCachedMesh {
+    const void*   elem;
+    const float*  vbuf;
+    const WORD*   ibuf;
+    int           vtxCount;
+    int           listCount;
+    int           primType;
+    TmdCachedVtx* verts;
+    uint16_t*     indices;
+    int           indexCount;
+};
+
+#define TMD_MESH_CACHE_SIZE 512  // power of 2
+static TmdCachedMesh* g_meshCache = NULL;
+
+static const TmdCachedMesh* GetOrBuildCachedMesh(const void* elem, const float* vbuf, const WORD* ibuf,
+                                                 int vtxCount, int listCount, int primType)
+{
+    if (g_meshCache == NULL) {
+        g_meshCache = (TmdCachedMesh*)calloc(TMD_MESH_CACHE_SIZE, sizeof(TmdCachedMesh));
+        if (g_meshCache == NULL) return NULL;
+    }
+
+    uintptr_t h = ((uintptr_t)elem >> 4) * 2654435761u;
+    int slot = (int)(h & (TMD_MESH_CACHE_SIZE - 1));
+    int firstEmpty = -1;
+    for (int probe = 0; probe < 16; probe++) {
+        int idx = (slot + probe) & (TMD_MESH_CACHE_SIZE - 1);
+        TmdCachedMesh* m = &g_meshCache[idx];
+        if (m->elem == elem) {
+            if (m->vbuf == vbuf && m->ibuf == ibuf &&
+                m->vtxCount == vtxCount && m->listCount == listCount &&
+                m->primType == primType) {
+                return m;
+            }
+            // Stale entry for reused slot: rebuild in place
+            firstEmpty = idx;
+            break;
+        }
+        if (m->elem == NULL && firstEmpty < 0) {
+            firstEmpty = idx;
+            break;
+        }
+    }
+    if (firstEmpty < 0) return NULL;
+
+    TmdCachedMesh* m = &g_meshCache[firstEmpty];
+    free(m->verts);
+    free(m->indices);
+    m->verts = (TmdCachedVtx*)malloc(sizeof(TmdCachedVtx) * (size_t)vtxCount);
+    int maxIdx = listCount * ((primType == 3) ? 3 : 6);
+    m->indices = (uint16_t*)malloc(sizeof(uint16_t) * (size_t)maxIdx);
+    if (!m->verts || !m->indices) {
+        free(m->verts); free(m->indices);
+        m->verts = NULL; m->indices = NULL; m->elem = NULL;
+        return NULL;
+    }
+
+    const float* flatN = vbuf + 3;
+    for (int v = 0; v < vtxCount; v++) {
+        const float* vtx = vbuf + v * 11;
+        TmdCachedVtx* cv = &m->verts[v];
+        cv->x = (int16_t)vtx[0];
+        cv->y = (int16_t)vtx[1];
+        cv->z = (int16_t)vtx[2];
+        const float* n = vtx + 3;
+        if (n[0] == 0.0f && n[1] == 0.0f && n[2] == 0.0f) n = flatN;
+        cv->nx = (int16_t)(n[0] * 4096.0f);
+        cv->ny = (int16_t)(n[1] * 4096.0f);
+        cv->nz = (int16_t)(n[2] * 4096.0f);
+        cv->u  = (int32_t)(vtx[9]  * 65536.0f);
+        cv->v  = (int32_t)(vtx[10] * 65536.0f);
+        cv->r  = TmdClampByte(vtx[6]);
+        cv->g  = TmdClampByte(vtx[7]);
+        cv->b  = TmdClampByte(vtx[8]);
+        cv->hasColor = (vtx[6] != 1.0f || vtx[7] != 1.0f || vtx[8] != 1.0f) ? 1 : 0;
+    }
+
+    int outIdx = 0;
+    if (primType == 3) {
+        for (int p = 0; p < listCount; p++) {
+            const WORD* ip = ibuf + p * 3;
+            WORD i0 = ip[0], i1 = ip[1], i2 = ip[2];
+            if (i0 >= vtxCount || i1 >= vtxCount || i2 >= vtxCount) continue;
+            m->indices[outIdx++] = i0;
+            m->indices[outIdx++] = i1;
+            m->indices[outIdx++] = i2;
+        }
+    } else {
+        for (int p = 0; p < listCount; p++) {
+            const WORD* ip = ibuf + p * 4;
+            WORD i0 = ip[0], i1 = ip[1], i2 = ip[2], i3 = ip[3];
+            if (i0 >= vtxCount || i1 >= vtxCount || i2 >= vtxCount || i3 >= vtxCount) continue;
+            m->indices[outIdx++] = i0;
+            m->indices[outIdx++] = i1;
+            m->indices[outIdx++] = i2;
+            m->indices[outIdx++] = i0;
+            m->indices[outIdx++] = i2;
+            m->indices[outIdx++] = i3;
+        }
+    }
+
+    m->elem       = elem;
+    m->vbuf       = vbuf;
+    m->ibuf       = ibuf;
+    m->vtxCount   = vtxCount;
+    m->listCount  = listCount;
+    m->primType   = primType;
+    m->indexCount = outIdx;
+    return m;
+}
+
+struct TmdBatchObj {
+    const TmdCachedMesh* mesh;
+    uint32_t             vertOffset; // offset into s_viewVertPool
+    DWORD                tex;
+    int                  nextInBucket;
+};
+
+struct TmdDirectObj {
+    const float*    vbuf;
+    const uint16_t* staticIndices; // non-NULL when using elem's index buffer directly
+    uint32_t        indexOffset;   // offset into g_tmdIndexPool when staticIndices == NULL
+    int             indexCount;
+    uint32_t        rgbaOffset;    // offset into g_tmdRgbaPool (4 bytes per vertex)
+    const float*    modelM;
+    DWORD           tex;
+    int             nextInBucket;
+};
 
 // ============================================================================
 // FlushTmdObjects - transform, light and draw every queued TMD object.
@@ -365,6 +564,9 @@ static void TmdComputeLight(const TmdLightState* ls, const float* n, const float
 
 void FlushTmdObjects(void)
 {
+#ifdef __ZEEBO__
+    uint32_t tmdStartMs = plat_time_ms();
+#endif
     int queued = g_tmdQueueCount;
 
     unsigned int maskDepths[TMD_MAX_SCENE_DEPTHS];
@@ -446,6 +648,67 @@ void FlushTmdObjects(void)
         // no Z, so without this the far side of each limb paints over its own
         // near side and the model renders as a dark shell.
         int collected = 0;
+        bool hasTranslucent = false;
+
+        // Per-frame heap pools for the batched view-space fixed-point path
+        // (opaque cached meshes) and the direct indexed fallback path.
+        static TmdBatchObj*            s_batchObjs     = NULL;
+        static MarniDX::ViewBatchVert* s_viewVertPool  = NULL;
+        static int                     s_viewVertCap   = 0;
+        static MarniDX::ViewBatchVert* s_batchVerts    = NULL;
+        static int                     s_batchVertCap  = 0;
+        static uint16_t*               s_batchIndices  = NULL;
+        static int                     s_batchIdxCap   = 0;
+
+        static TmdDirectObj* s_directObjs    = NULL;
+        static uint8_t*      s_rgbaPool      = NULL;
+        static int           s_rgbaPoolCap   = 0;
+        static uint16_t*     s_indexPool     = NULL;
+        static int           s_indexPoolCap  = 0;
+
+        if (s_batchObjs == NULL) {
+            s_batchObjs = (TmdBatchObj*)malloc(sizeof(TmdBatchObj) * TMD_MAX_QUEUE);
+        }
+        if (s_viewVertPool == NULL) {
+            s_viewVertCap = 32768;
+            s_viewVertPool = (MarniDX::ViewBatchVert*)malloc(sizeof(MarniDX::ViewBatchVert) * (size_t)s_viewVertCap);
+        }
+        if (s_batchVerts == NULL) {
+            s_batchVertCap = 16384;
+            s_batchVerts = (MarniDX::ViewBatchVert*)malloc(sizeof(MarniDX::ViewBatchVert) * (size_t)s_batchVertCap);
+        }
+        if (s_batchIndices == NULL) {
+            s_batchIdxCap = 65536;
+            s_batchIndices = (uint16_t*)malloc(sizeof(uint16_t) * (size_t)s_batchIdxCap);
+        }
+        if (s_directObjs == NULL) {
+            s_directObjs = (TmdDirectObj*)malloc(sizeof(TmdDirectObj) * TMD_MAX_QUEUE);
+        }
+        if (s_rgbaPool == NULL) {
+            s_rgbaPoolCap = 65536 * 4;
+            s_rgbaPool = (uint8_t*)malloc((size_t)s_rgbaPoolCap);
+        }
+        if (s_indexPool == NULL) {
+            s_indexPoolCap = 65536;
+            s_indexPool = (uint16_t*)malloc(sizeof(uint16_t) * (size_t)s_indexPoolCap);
+        }
+
+        int batchCount   = 0;
+        int viewVertUsed = 0;
+        int batchHead[TMD_MAX_SCENE_DEPTHS + 1];
+        int batchTail[TMD_MAX_SCENE_DEPTHS + 1];
+
+        int directCount = 0;
+        int rgbaUsed    = 0;
+        int indexUsed   = 0;
+        int bucketHead[TMD_MAX_SCENE_DEPTHS + 1];
+        int bucketTail[TMD_MAX_SCENE_DEPTHS + 1];
+        for (int b = 0; b <= maskCount; b++) {
+            batchHead[b]  = -1;
+            batchTail[b]  = -1;
+            bucketHead[b] = -1;
+            bucketTail[b] = -1;
+        }
 
         for (int i = 0; i < queued; i++) {
             TmdDrawEntry* e = &g_tmdQueue[i];
@@ -578,138 +841,369 @@ void FlushTmdObjects(void)
             if (knockTex != MARNI_NULL_HANDLE && !renderStateModelActive)
                 unlit = false;
 
-            // Transform + project + light every vertex using a reusable scratch buffer.
-            static float* s_vtxScratch = NULL;
+            // Fast batched integer path for opaque cached TMD meshes (all
+            // characters, enemies, doors, room objects). Zero soft-float per vertex!
+            if (triAlpha >= 0.999f && e->slot != NULL && s_batchObjs != NULL && batchCount < TMD_MAX_QUEUE) {
+                const TmdCachedMesh* mesh = GetOrBuildCachedMesh(
+                    elem, vbuf, ibuf, vtxCount, listCount, primType);
+                if (mesh != NULL && mesh->indexCount > 0) {
+                    if (viewVertUsed + vtxCount > s_viewVertCap) {
+                        int newCap = s_viewVertCap * 2;
+                        while (viewVertUsed + vtxCount > newCap) newCap *= 2;
+                        MarniDX::ViewBatchVert* newPool = (MarniDX::ViewBatchVert*)realloc(
+                            s_viewVertPool, sizeof(MarniDX::ViewBatchVert) * (size_t)newCap);
+                        if (newPool) {
+                            s_viewVertPool = newPool;
+                            s_viewVertCap = newCap;
+                        }
+                    }
+
+                    if (viewVertUsed + vtxCount <= s_viewVertCap) {
+                        const int32_t m00 = (int32_t)(M[0] * 4096.0f), m01 = (int32_t)(M[4] * 4096.0f), m02 = (int32_t)(M[8]  * 4096.0f);
+                        const int32_t m10 = (int32_t)(M[1] * 4096.0f), m11 = (int32_t)(M[5] * 4096.0f), m12 = (int32_t)(M[9]  * 4096.0f);
+                        const int32_t m20 = (int32_t)(M[2] * 4096.0f), m21 = (int32_t)(M[6] * 4096.0f), m22 = (int32_t)(M[10] * 4096.0f);
+                        const int32_t tx_q4 = (int32_t)(M[12] * 16.0f);
+                        const int32_t ty_q4 = (int32_t)(M[13] * 16.0f);
+                        const int32_t tz_q4 = (int32_t)(M[14] * 16.0f);
+                        const int32_t nearZ_q4 = (int32_t)(nearZ * 16.0f);
+
+                        MarniDX::ViewBatchVert* dstV = s_viewVertPool + viewVertUsed;
+                        const TmdCachedVtx* cv = mesh->verts;
+
+                        int32_t minVz_q4 = 0x7FFFFFFF;
+                        int32_t maxVz_q4 = (int32_t)0x80000000;
+                        bool anyClipped = false;
+                        bool allClipped = true;
+
+                        for (int v = 0; v < vtxCount; v++) {
+                            int32_t x = cv[v].x, y = cv[v].y, z = cv[v].z;
+                            int32_t vx_q4 = ((m00 * x + m01 * y + m02 * z) >> 8) + tx_q4;
+                            int32_t vy_q4 = ((m10 * x + m11 * y + m12 * z) >> 8) + ty_q4;
+                            int32_t vz_q4 = ((m20 * x + m21 * y + m22 * z) >> 8) + tz_q4;
+
+                            dstV[v].x = vx_q4 << 12;
+                            dstV[v].y = vy_q4 << 12;
+                            dstV[v].z = vz_q4 << 12;
+                            dstV[v].u = cv[v].u;
+                            dstV[v].v = cv[v].v;
+
+                            if (vz_q4 < nearZ_q4) {
+                                anyClipped = true;
+                            } else {
+                                allClipped = false;
+                            }
+                            if (vz_q4 < minVz_q4) minVz_q4 = vz_q4;
+                            if (vz_q4 > maxVz_q4) maxVz_q4 = vz_q4;
+                        }
+
+                        if (allClipped) continue;
+
+                        if (!anyClipped) {
+                            float minVzF = (float)(minVz_q4 >> 4);
+                            float maxVzF = (float)(maxVz_q4 >> 4);
+                            int bFirst = (maskCount == 0) ? 0 : FindMaskBucket(maxVzF, maskDepths, maskCount);
+                            int bLast  = (maskCount == 0) ? 0 : FindMaskBucket(minVzF, maskDepths, maskCount);
+
+                            if (bFirst == bLast) {
+                                // Light all vertices into dstV[v].r/g/b/a
+                                if (unlit) {
+                                    uint8_t r8 = TmdClampByte(objScaleR);
+                                    uint8_t g8 = TmdClampByte(objScaleG);
+                                    uint8_t b8 = TmdClampByte(objScaleB);
+                                    for (int v = 0; v < vtxCount; v++) {
+                                        dstV[v].r = r8; dstV[v].g = g8; dstV[v].b = b8; dstV[v].a = 255;
+                                    }
+                                } else {
+                                    TmdLocalLightsQ12 ll;
+                                    TmdPrepareLocalLights(&g_tmdLight[i], M, &ll);
+                                    const bool hasObjScale = (objScaleR != 1.0f || objScaleG != 1.0f || objScaleB != 1.0f);
+                                    const int32_t srQ12 = hasObjScale ? (int32_t)(objScaleR * 4096.0f) : 4096;
+                                    const int32_t sgQ12 = hasObjScale ? (int32_t)(objScaleG * 4096.0f) : 4096;
+                                    const int32_t sbQ12 = hasObjScale ? (int32_t)(objScaleB * 4096.0f) : 4096;
+
+                                    struct TmdLightKeyInt { int16_t nx, ny, nz; int32_t rQ12, gQ12, bQ12; };
+                                    static TmdLightKeyInt lightKeysInt[64];
+                                    int lightKeyCount = 0;
+                                    bool lightCacheFull = false;
+
+                                    for (int v = 0; v < vtxCount; v++) {
+                                        int16_t nx = cv[v].nx, ny = cv[v].ny, nz = cv[v].nz;
+                                        int32_t rQ12 = 0, gQ12 = 0, bQ12 = 0;
+                                        bool litCached = false;
+                                        if (!lightCacheFull) {
+                                            for (int c = 0; c < lightKeyCount; ++c) {
+                                                const TmdLightKeyInt* k = &lightKeysInt[c];
+                                                if (k->nx == nx && k->ny == ny && k->nz == nz) {
+                                                    rQ12 = k->rQ12; gQ12 = k->gQ12; bQ12 = k->bQ12;
+                                                    litCached = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if (!litCached) {
+                                            TmdEvalLocalLightQ12_Int(&ll, nx, ny, nz, &rQ12, &gQ12, &bQ12);
+                                            if (!lightCacheFull) {
+                                                if (lightKeyCount < 64) {
+                                                    TmdLightKeyInt* k = &lightKeysInt[lightKeyCount++];
+                                                    k->nx = nx; k->ny = ny; k->nz = nz;
+                                                    k->rQ12 = rQ12; k->gQ12 = gQ12; k->bQ12 = bQ12;
+                                                } else {
+                                                    lightCacheFull = true;
+                                                }
+                                            }
+                                        }
+                                        if (!hasObjScale && !cv[v].hasColor) {
+                                            dstV[v].r = (uint8_t)((rQ12 * 255) >> 12);
+                                            dstV[v].g = (uint8_t)((gQ12 * 255) >> 12);
+                                            dstV[v].b = (uint8_t)((bQ12 * 255) >> 12);
+                                            dstV[v].a = 255;
+                                        } else {
+                                            int32_t r = (rQ12 * (cv[v].hasColor ? cv[v].r : 255)) >> 12;
+                                            int32_t g = (gQ12 * (cv[v].hasColor ? cv[v].g : 255)) >> 12;
+                                            int32_t b = (bQ12 * (cv[v].hasColor ? cv[v].b : 255)) >> 12;
+                                            if (hasObjScale) {
+                                                r = (r * srQ12) >> 12;
+                                                g = (g * sgQ12) >> 12;
+                                                b = (b * sbQ12) >> 12;
+                                            }
+                                            dstV[v].r = (uint8_t)(r > 255 ? 255 : (r < 0 ? 0 : r));
+                                            dstV[v].g = (uint8_t)(g > 255 ? 255 : (g < 0 ? 0 : g));
+                                            dstV[v].b = (uint8_t)(b > 255 ? 255 : (b < 0 ? 0 : b));
+                                            dstV[v].a = 255;
+                                        }
+                                    }
+                                }
+
+                                TmdBatchObj* bo = &s_batchObjs[batchCount];
+                                bo->mesh         = mesh;
+                                bo->vertOffset   = (uint32_t)viewVertUsed;
+                                bo->tex          = tex;
+                                bo->nextInBucket = -1;
+                                if (batchTail[bFirst] < 0) {
+                                    batchHead[bFirst] = batchCount;
+                                } else {
+                                    s_batchObjs[batchTail[bFirst]].nextInBucket = batchCount;
+                                }
+                                batchTail[bFirst] = batchCount;
+                                batchCount++;
+                                viewVertUsed += vtxCount;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Per-vertex view-space Z only (projection & backface cull run on GLES1).
+            static float* s_vzScratch   = NULL;
             static char*  s_clipScratch = NULL;
             static int    s_vtxScratchCap = 0;
             if (vtxCount > s_vtxScratchCap) {
                 int newCap = (vtxCount < 256) ? 256 : vtxCount;
-                float* newF = (float*)realloc(s_vtxScratch, sizeof(float) * newCap * 7);
+                float* newZ = (float*)realloc(s_vzScratch, sizeof(float) * (size_t)newCap);
                 char*  newC = (char*)realloc(s_clipScratch, (size_t)newCap);
-                if (!newF || !newC) {
-                    if (newF) s_vtxScratch = newF;
+                if (!newZ || !newC) {
+                    if (newZ) s_vzScratch = newZ;
                     if (newC) s_clipScratch = newC;
                     continue;
                 }
-                s_vtxScratch = newF;
+                s_vzScratch = newZ;
                 s_clipScratch = newC;
                 s_vtxScratchCap = newCap;
             }
-            float* sx = s_vtxScratch;
-            float* sy = sx + vtxCount;
-            float* vzArr = sx + vtxCount * 2;   // view-space Z, for the depth sort
-            float* cr = sx + vtxCount * 3;
-            float* cg = sx + vtxCount * 4;
-            float* cb = sx + vtxCount * 5;
-            char* clipped = s_clipScratch;
+            float* vzArr   = s_vzScratch;
+            char*  clipped = s_clipScratch;
 
-            // First normal (flat-shaded primitives only fill vertex 0)
-            float flatN[3] = { vbuf[3], vbuf[4], vbuf[5] };
-
-            // Cache de iluminacao por normal: modelos PS1 tem poucos normais
-            // distintos (faces planas). Sem isso TmdComputeLight roda ~30
-            // operacoes soft-float por vertice. Por objeto (M/luz mudam).
-            struct TmdLightKey { float x, y, z, r, g, b; };
-            static TmdLightKey lightKeys[64];
-            int lightKeyCount = 0;
-            bool lightCacheFull = false;
-
+            const float m2 = M[2], m6 = M[6], m10 = M[10], m14 = M[14];
+            float minVz = 1e30f, maxVz = -1e30f;
+            bool anyClipped = false;
+            bool allClipped = true;
             for (int v = 0; v < vtxCount; v++) {
                 const float* vtx = vbuf + v * 11;
-                float x = vtx[0], y = vtx[1], z = vtx[2];
-                float vx = M[0] * x + M[4] * y + M[8]  * z + M[12];
-                float vy = M[1] * x + M[5] * y + M[9]  * z + M[13];
-                float vz = M[2] * x + M[6] * y + M[10] * z + M[14];
-
+                float vz = m2 * vtx[0] + m6 * vtx[1] + m10 * vtx[2] + m14;
                 vzArr[v] = vz;
                 if (vz < nearZ) {
                     clipped[v] = 1;
-                    sx[v] = sy[v] = 0.0f;
-                }
-                else {
+                    anyClipped = true;
+                } else {
                     clipped[v] = 0;
-                    float iz = fg / vz;
-                    sx[v] = cx + vx * iz * scaleX;
-                    sy[v] = cy - vy * iz * scaleY;
+                    allClipped = false;
                 }
+                if (vz < minVz) minVz = vz;
+                if (vz > maxVz) maxVz = vz;
+            }
+            if (allClipped) continue;
 
-                if (unlit) {
-                    // The original's else-branch at 0x00447043: no ambient, no
-                    // lights, the vertex colour becomes the primitive colour.
-                    // PSXObject_Store writes 1.0 for textured primitives, so a
-                    // door renders at full texture brightness every time.
-                    //
-                    // The death-wound tint (JointSetColorTint) writes the
-                    // object entry's colour floats at +0x5C and sets the unlit
-                    // bit at +0x80 at runtime; the vertex buffer is built once
-                    // at load and never re-synced, so an unlit entry with a
-                    // tinted colour reads it here (the wounds on the corpse).
-                    //
-                    // The original reads +0x5C..+0x64 unconditionally here
-                    // (0x0044704c). Every TMD slot object holds 1.0f there from
-                    // load (Marni3DObject's store loop), so all-zero is a REAL
-                    // black tint, not "untinted": the Super Tyrant's rocket
-                    // death tints its scattered limbs with colour 0
-                    // (em_scd_behavior_rocket_death, frame 8) and they must
-                    // draw black. Only a complex-pool entry (slot == NULL)
-                    // keeps the zero fallback - its objData+0x5C is the
-                    // trail's UV words, not a colour.
-                    float tr = *(float*)(e->objData + 0x5C);
-                    float tg = *(float*)(e->objData + 0x60);
-                    float tb = *(float*)(e->objData + 0x64);
-                    if (e->slot != NULL || tr != 0.0f || tg != 0.0f || tb != 0.0f) {
-                        cr[v] = tr; cg[v] = tg; cb[v] = tb;
-                    } else {
-                        cr[v] = vtx[6]; cg[v] = vtx[7]; cb[v] = vtx[8];
+            // Reserve space in the per-frame uint8_t RGBA pool for this object.
+            int rgbaNeed = vtxCount * 4;
+            if (rgbaUsed + rgbaNeed > s_rgbaPoolCap) {
+                int newCap = s_rgbaPoolCap * 2;
+                while (rgbaUsed + rgbaNeed > newCap) newCap *= 2;
+                uint8_t* newPool = (uint8_t*)realloc(s_rgbaPool, (size_t)newCap);
+                if (!newPool) continue;
+                s_rgbaPool = newPool;
+                s_rgbaPoolCap = newCap;
+            }
+            uint32_t rgbaOffset = (uint32_t)rgbaUsed;
+            uint8_t* rgbaOut = s_rgbaPool + rgbaOffset;
+            rgbaUsed += rgbaNeed;
+
+            const uint8_t alphaByte = (triAlpha >= 0.999f) ? 255 : TmdClampByte(triAlpha);
+
+            if (unlit) {
+                if (e->slot != NULL || objScaleR != 0.0f || objScaleG != 0.0f || objScaleB != 0.0f) {
+                    uint8_t r8 = TmdClampByte(objScaleR);
+                    uint8_t g8 = TmdClampByte(objScaleG);
+                    uint8_t b8 = TmdClampByte(objScaleB);
+                    for (int v = 0; v < vtxCount; v++) {
+                        uint8_t* dst = rgbaOut + v * 4;
+                        dst[0] = r8; dst[1] = g8; dst[2] = b8; dst[3] = alphaByte;
+                    }
+                } else {
+                    for (int v = 0; v < vtxCount; v++) {
+                        const float* vtx = vbuf + v * 11;
+                        uint8_t* dst = rgbaOut + v * 4;
+                        dst[0] = TmdClampByte(vtx[6]);
+                        dst[1] = TmdClampByte(vtx[7]);
+                        dst[2] = TmdClampByte(vtx[8]);
+                        dst[3] = alphaByte;
                     }
                 }
-                else {
-                    // Lighting: vertices without a normal (flat prims) reuse
-                    // the first vertex's normal.
+            } else {
+                TmdLocalLightsQ12 ll;
+                TmdPrepareLocalLights(&g_tmdLight[i], M, &ll);
+
+                const bool hasObjScale = (objScaleR != 1.0f || objScaleG != 1.0f || objScaleB != 1.0f);
+                const float* flatN = vbuf + 3;
+
+                struct TmdLightKeyQ12 { float x, y, z; int32_t rQ12, gQ12, bQ12; };
+                static TmdLightKeyQ12 lightKeys[64];
+                int lightKeyCount = 0;
+                bool lightCacheFull = false;
+
+                for (int v = 0; v < vtxCount; v++) {
+                    const float* vtx = vbuf + v * 11;
                     const float* n = vtx + 3;
                     if (n[0] == 0.0f && n[1] == 0.0f && n[2] == 0.0f) n = flatN;
+
+                    int32_t rQ12 = 0, gQ12 = 0, bQ12 = 0;
                     bool litCached = false;
                     if (!lightCacheFull) {
                         for (int c = 0; c < lightKeyCount; ++c) {
-                            const TmdLightKey* k = &lightKeys[c];
+                            const TmdLightKeyQ12* k = &lightKeys[c];
                             if (k->x == n[0] && k->y == n[1] && k->z == n[2]) {
-                                cr[v] = k->r; cg[v] = k->g; cb[v] = k->b;
+                                rQ12 = k->rQ12; gQ12 = k->gQ12; bQ12 = k->bQ12;
                                 litCached = true;
                                 break;
                             }
                         }
                     }
                     if (!litCached) {
-                        TmdComputeLight(&g_tmdLight[i], n, M, &cr[v], &cg[v], &cb[v]);
+                        TmdEvalLocalLightQ12(&ll, n, &rQ12, &gQ12, &bQ12);
                         if (!lightCacheFull) {
                             if (lightKeyCount < 64) {
-                                TmdLightKey* k = &lightKeys[lightKeyCount++];
+                                TmdLightKeyQ12* k = &lightKeys[lightKeyCount++];
                                 k->x = n[0]; k->y = n[1]; k->z = n[2];
-                                k->r = cr[v]; k->g = cg[v]; k->b = cb[v];
+                                k->rQ12 = rQ12; k->gQ12 = gQ12; k->bQ12 = bQ12;
                             } else {
                                 lightCacheFull = true;
                             }
                         }
                     }
-                    cr[v] *= vtx[6]; cg[v] *= vtx[7]; cb[v] *= vtx[8];
-                    // The original multiplies the lit colour by the object's
-                    // colour scale before the 0..255 clamp: 0x00447169
-                    // (`FLD [EDI+0x5c]` then `FIMUL`), 0x0044719d for +0x60 and
-                    // 0x004471b7 for +0x64. Only TWO of this function's SIX
-                    // reads of +0x5C sit behind the `TEST [EDI+0x80],2` unlit
-                    // gate at 0x00446e99 / 0x00447043 - this one does not.
-                    //
-                    // Without it a LIT model can never be tinted, because the
-                    // only other reader is the unlit branch below. That is why
-                    // the monster plant's poison pulse accumulated a correct
-                    // (2,-3,0) into all 15 joint objects of all six plants and
-                    // nothing changed on screen. Untinted objects hold 1.0f
-                    // here, so this is a no-op for them.
-                    cr[v] *= objScaleR; cg[v] *= objScaleG; cb[v] *= objScaleB;
+
+                    uint8_t* dst = rgbaOut + v * 4;
+                    if (!hasObjScale && vtx[6] == 1.0f && vtx[7] == 1.0f && vtx[8] == 1.0f) {
+                        dst[0] = (uint8_t)((rQ12 * 255) >> 12);
+                        dst[1] = (uint8_t)((gQ12 * 255) >> 12);
+                        dst[2] = (uint8_t)((bQ12 * 255) >> 12);
+                        dst[3] = alphaByte;
+                    } else {
+                        const float inv4096 = 1.0f / 4096.0f;
+                        dst[0] = TmdClampByte((float)rQ12 * inv4096 * vtx[6] * objScaleR);
+                        dst[1] = TmdClampByte((float)gQ12 * inv4096 * vtx[7] * objScaleG);
+                        dst[2] = TmdClampByte((float)bQ12 * inv4096 * vtx[8] * objScaleB);
+                        dst[3] = alphaByte;
+                    }
                 }
             }
 
-            // Emit triangles
+            // Fast path: opaque object that sits entirely within one mask bucket.
+            if (triAlpha >= 0.999f && s_directObjs != NULL && directCount < TMD_MAX_QUEUE) {
+                int bFirst = (maskCount == 0) ? 0 : FindMaskBucket(maxVz, maskDepths, maskCount);
+                int bLast  = (maskCount == 0) ? 0 : FindMaskBucket(minVz, maskDepths, maskCount);
+                if (bFirst == bLast) {
+                    TmdDirectObj* dobj = &s_directObjs[directCount];
+                    dobj->vbuf       = vbuf;
+                    dobj->rgbaOffset = rgbaOffset;
+                    dobj->modelM     = M;
+                    dobj->tex        = tex;
+                    dobj->nextInBucket = -1;
+
+                    if (primType == 3 && !anyClipped) {
+                        dobj->staticIndices = ibuf;
+                        dobj->indexOffset   = 0;
+                        dobj->indexCount    = listCount * 3;
+                    } else {
+                        int maxIdx = listCount * ((primType == 3) ? 3 : 6);
+                        if (indexUsed + maxIdx > s_indexPoolCap) {
+                            int newCap = s_indexPoolCap * 2;
+                            while (indexUsed + maxIdx > newCap) newCap *= 2;
+                            uint16_t* newIdx = (uint16_t*)realloc(s_indexPool, sizeof(uint16_t) * (size_t)newCap);
+                            if (!newIdx) goto fallback_emit;
+                            s_indexPool = newIdx;
+                            s_indexPoolCap = newCap;
+                        }
+                        uint32_t idxOff = (uint32_t)indexUsed;
+                        uint16_t* dstIdx = s_indexPool + idxOff;
+                        int outIdxCount = 0;
+
+                        if (primType == 3) {
+                            for (int pIdx = 0; pIdx < listCount; pIdx++) {
+                                const WORD* ip = ibuf + pIdx * 3;
+                                WORD i0 = ip[0], i1 = ip[1], i2 = ip[2];
+                                if (i0 >= vtxCount || i1 >= vtxCount || i2 >= vtxCount) continue;
+                                if (clipped[i0] | clipped[i1] | clipped[i2]) continue;
+                                dstIdx[outIdxCount++] = i0;
+                                dstIdx[outIdxCount++] = i1;
+                                dstIdx[outIdxCount++] = i2;
+                            }
+                        } else {
+                            for (int pIdx = 0; pIdx < listCount; pIdx++) {
+                                const WORD* ip = ibuf + pIdx * 4;
+                                WORD i0 = ip[0], i1 = ip[1], i2 = ip[2], i3 = ip[3];
+                                if (i0 >= vtxCount || i1 >= vtxCount || i2 >= vtxCount || i3 >= vtxCount) continue;
+                                if (clipped[i0] | clipped[i1] | clipped[i2] | clipped[i3]) continue;
+                                dstIdx[outIdxCount++] = i0;
+                                dstIdx[outIdxCount++] = i1;
+                                dstIdx[outIdxCount++] = i2;
+                                dstIdx[outIdxCount++] = i0;
+                                dstIdx[outIdxCount++] = i2;
+                                dstIdx[outIdxCount++] = i3;
+                            }
+                        }
+                        indexUsed += outIdxCount;
+                        dobj->staticIndices = NULL;
+                        dobj->indexOffset   = idxOff;
+                        dobj->indexCount    = outIdxCount;
+                    }
+
+                    if (dobj->indexCount > 0) {
+                        if (bucketTail[bFirst] < 0) {
+                            bucketHead[bFirst] = directCount;
+                        } else {
+                            s_directObjs[bucketTail[bFirst]].nextInBucket = directCount;
+                        }
+                        bucketTail[bFirst] = directCount;
+                        directCount++;
+                    }
+                    continue;
+                }
+            }
+
+        fallback_emit:
+            if (triAlpha < 0.999f) hasTranslucent = true;
+
+            // Emit triangles for straddling opaque objects or translucent objects.
             for (int pIdx = 0; pIdx < listCount; pIdx++) {
                 WORD idx[4];
                 int vertsInPrim = (primType == 3) ? 3 : 4;
@@ -722,44 +1216,14 @@ void FlushTmdObjects(void)
                     if (idx[v] >= vtxCount) { oob = true; break; }
                 if (oob) continue;
 
-                // Both the near-clip and the backface test are decided ONCE per
-                // primitive and gate all of its triangles, exactly as the
-                // original does - a quad never loses only one of its halves.
-                //
-                // Near clip: the original's guard is
-                // `clip[a] + clip[b] + clip[c] (+ clip[d]) == 0`, i.e. one
-                // clipped vertex drops the whole packet.
                 int clipSum = 0;
                 for (int v = 0; v < vertsInPrim; v++) clipSum += clipped[idx[v]];
                 if (clipSum != 0) continue;
 
-                // Backface cull. The original tests
-                //     0 < (ya - yb) * (xc - xb) + (yc - yb) * (xb - xa)
-                // over the packet's FIRST THREE screen vertices (the condition
-                // in front of every AddPrim in FUN_00446e40), which expands
-                // term for term to the signed area below - so there is no
-                // winding convention left to choose. This port previously drew
-                // both sides and leaned on the depth buffer; that is what let
-                // an object the camera sits inside paint its far shell over the
-                // whole frame, since every surviving triangle there is a back
-                // face. The index buffer feeding this is byte-identical to the
-                // original's (PSXObject_Store writes quads as base+0,+1,+3,+2),
-                // so the vertex order the test sees is the original's too.
-                float x0 = sx[idx[0]], y0 = sy[idx[0]];
-                float x1 = sx[idx[1]], y1 = sy[idx[1]];
-                float x2 = sx[idx[2]], y2 = sy[idx[2]];
-                if ((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0) <= 0.0f)
-                    continue;
-
-                // Triangulate: (0,1,2) + (0,2,3) for quads
                 for (int t = 0; t < vertsInPrim - 2; t++) {
                     WORD i0 = idx[0];
                     WORD i1 = idx[t + 1];
                     WORD i2 = idx[t + 2];
-
-                    x0 = sx[i0]; y0 = sy[i0];
-                    x1 = sx[i1]; y1 = sy[i1];
-                    x2 = sx[i2]; y2 = sy[i2];
 
                     if (collected >= TMD_MAX_TRIS_COLLECT) continue;
 
@@ -768,42 +1232,28 @@ void FlushTmdObjects(void)
                     const float* v0 = vbuf + i0 * 11;
                     const float* v1 = vbuf + i1 * 11;
                     const float* v2 = vbuf + i2 * 11;
-                    // Posicao do MODELO: o GLES1 aplica M e a projecao.
+                    const uint8_t* c0 = rgbaOut + i0 * 4;
+                    const uint8_t* c1 = rgbaOut + i1 * 4;
+                    const uint8_t* c2 = rgbaOut + i2 * 4;
+                    const float inv255 = 1.0f / 255.0f;
+
                     o[0]  = v0[0]; o[1]  = v0[1]; o[2]  = v0[2]; o[3]  = 1.0f;
-                    o[4]  = v0[9];  o[5]  = v0[10];
-                    o[6]  = cr[i0]; o[7]  = cg[i0]; o[8]  = cb[i0]; o[9]  = triAlpha;
+                    o[4]  = v0[9]; o[5]  = v0[10];
+                    o[6]  = c0[0] * inv255; o[7]  = c0[1] * inv255; o[8]  = c0[2] * inv255; o[9]  = triAlpha;
                     o[10] = v1[0]; o[11] = v1[1]; o[12] = v1[2]; o[13] = 1.0f;
-                    o[14] = v1[9];  o[15] = v1[10];
-                    o[16] = cr[i1]; o[17] = cg[i1]; o[18] = cb[i1]; o[19] = triAlpha;
+                    o[14] = v1[9]; o[15] = v1[10];
+                    o[16] = c1[0] * inv255; o[17] = c1[1] * inv255; o[18] = c1[2] * inv255; o[19] = triAlpha;
                     o[20] = v2[0]; o[21] = v2[1]; o[22] = v2[2]; o[23] = 1.0f;
-                    o[24] = v2[9];  o[25] = v2[10];
-                    o[26] = cr[i2]; o[27] = cg[i2]; o[28] = cb[i2]; o[29] = triAlpha;
-                    t3->depth = (vzArr[i0] + vzArr[i1] + vzArr[i2]) * (1.0f / 3.0f);
-                    t3->tex   = tex;
-                    t3->alpha = triAlpha;
+                    o[24] = v2[9]; o[25] = v2[10];
+                    o[26] = c2[0] * inv255; o[27] = c2[1] * inv255; o[28] = c2[2] * inv255; o[29] = triAlpha;
+                    t3->depth   = (vzArr[i0] + vzArr[i1] + vzArr[i2]) * (1.0f / 3.0f);
+                    t3->tex     = tex;
+                    t3->alpha   = triAlpha;
                     t3->otDepth = e->depth;
-                    t3->modelM = M;
+                    t3->modelM  = M;
                     g_tmdTriOrder[collected] = collected;
                     collected++;
 
-                    // Second, opaque pass over the same geometry with the STP
-                    // texels knocked out (see knockTex above). It carries the
-                    // same depth and the same otDepth as its blended copy, so
-                    // the sort's `a < b` tail places it immediately after it -
-                    // nothing else can fall between two adjacent collection
-                    // indices.
-                    //
-                    // `alpha` is the DEPTH-WRITE class, not the opacity: the VS
-                    // takes the opacity from each vertex's own alpha, and the
-                    // two are deliberately split here. This copy must inherit
-                    // its blended partner's class (`triAlpha`, always < 1 on
-                    // this path) and write NO depth. It is a colour-only overlay
-                    // of geometry that is already in the buffer at the same Z -
-                    // giving it a depth footprint would let a model that never
-                    // wrote depth start occluding whatever the painter walk
-                    // reaches later, and the interior of a case this size is
-                    // exactly where a mis-ordered triangle would then punch a
-                    // hole instead of just painting in the wrong order.
                     if (knockTex != MARNI_NULL_HANDLE &&
                         collected < TMD_MAX_TRIS_COLLECT) {
                         TmdTri* k3 = &g_tmdTris[collected];
@@ -847,32 +1297,79 @@ void FlushTmdObjects(void)
         // deterministic frame to frame.
         static float triVerts[TMD_MAX_TRIS_FLUSH * TMD_TRI_FLOATS];
 
-        bool hasTranslucent = false;
-        for (int k = 0; k < collected; k++) {
-            if (g_tmdTris[k].alpha < 0.999f) {
-                hasTranslucent = true;
-                break;
+        auto flushBatchBucket = [&](int b) {
+            if (batchHead[b] < 0) return;
+            static uint8_t batchEmitted[TMD_MAX_QUEUE];
+            for (int bi = batchHead[b]; bi >= 0; bi = s_batchObjs[bi].nextInBucket) {
+                batchEmitted[bi] = 0;
             }
-        }
+            for (int bi = batchHead[b]; bi >= 0; bi = s_batchObjs[bi].nextInBucket) {
+                if (batchEmitted[bi]) continue;
+                DWORD curTex = s_batchObjs[bi].tex;
+                int vUsed = 0;
+                int iUsed = 0;
 
-        if (!hasTranslucent) {
-            // Fast path: depth buffer resolves all opaque triangles, so skip
-            // per-triangle depth sort and batch by (maskBucket, tex).
-            static uint8_t triBucket[TMD_MAX_TRIS_COLLECT];
-            static uint8_t triEmitted[TMD_MAX_TRIS_COLLECT];
-            if (maskCount == 0) {
-                memset(triBucket, 0, (size_t)collected);
-            } else {
-                for (int k = 0; k < collected; k++) {
-                    float d = g_tmdTris[k].depth;
-                    int b = 0;
-                    while (b < maskCount && (float)maskDepths[b] > d) {
-                        b++;
+                for (int bj = bi; bj >= 0; bj = s_batchObjs[bj].nextInBucket) {
+                    if (batchEmitted[bj] || s_batchObjs[bj].tex != curTex) continue;
+                    const TmdBatchObj* bo = &s_batchObjs[bj];
+                    const TmdCachedMesh* mesh = bo->mesh;
+                    int nv = mesh->vtxCount;
+                    int ni = mesh->indexCount;
+
+                    if (vUsed > 0 && (vUsed + nv > s_batchVertCap || vUsed + nv > 65535 || iUsed + ni > s_batchIdxCap)) {
+                        Marni_DX()->DrawViewBatch3D(
+                            s_batchVerts, s_batchIndices, iUsed,
+                            fg, cx, cy, scaleX, scaleY,
+                            (MarniHandle)curTex, MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, true);
+                        vUsed = 0;
+                        iUsed = 0;
                     }
-                    triBucket[k] = (uint8_t)b;
+                    if (nv > s_batchVertCap || ni > s_batchIdxCap) {
+                        // Safety fallback if a single mesh is huge
+                        batchEmitted[bj] = 1;
+                        Marni_DX()->DrawViewBatch3D(
+                            s_viewVertPool + bo->vertOffset, mesh->indices, ni,
+                            fg, cx, cy, scaleX, scaleY,
+                            (MarniHandle)curTex, MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, true);
+                        continue;
+                    }
+
+                    batchEmitted[bj] = 1;
+                    memcpy(s_batchVerts + vUsed, s_viewVertPool + bo->vertOffset,
+                           sizeof(MarniDX::ViewBatchVert) * (size_t)nv);
+                    const uint16_t baseV = (uint16_t)vUsed;
+                    const uint16_t* srcIdx = mesh->indices;
+                    uint16_t* dstIdx = s_batchIndices + iUsed;
+                    for (int k = 0; k < ni; k++) {
+                        dstIdx[k] = (uint16_t)(srcIdx[k] + baseV);
+                    }
+                    vUsed += nv;
+                    iUsed += ni;
+                }
+                if (iUsed > 0) {
+                    Marni_DX()->DrawViewBatch3D(
+                        s_batchVerts, s_batchIndices, iUsed,
+                        fg, cx, cy, scaleX, scaleY,
+                        (MarniHandle)curTex, MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, true);
                 }
             }
-            memset(triEmitted, 0, (size_t)collected);
+        };
+
+        Marni_DX()->Begin3DModelPass(fg, cx, cy, scaleX, scaleY);
+
+        if (!hasTranslucent) {
+            // O(N) bucket linked-list for any straddling opaque triangles.
+            int triBucketHead[TMD_MAX_SCENE_DEPTHS + 1];
+            static int triNext[TMD_MAX_TRIS_COLLECT];
+            if (collected > 0) {
+                for (int b = 0; b <= maskCount; b++) triBucketHead[b] = -1;
+                for (int k = collected - 1; k >= 0; k--) {
+                    int b = (maskCount == 0) ? 0
+                          : FindMaskBucket(g_tmdTris[k].depth, maskDepths, maskCount);
+                    triNext[k] = triBucketHead[b];
+                    triBucketHead[b] = k;
+                }
+            }
 
             for (int b = 0; b <= maskCount; b++) {
                 if (b > 0) {
@@ -880,29 +1377,44 @@ void FlushTmdObjects(void)
                     maskCursor = maskDepths[b - 1];
                     maskIdx = b;
                 }
-                for (int k = 0; k < collected; k++) {
-                    if (triEmitted[k] || triBucket[k] != (uint8_t)b) continue;
-                    DWORD curTex = g_tmdTris[k].tex;
-                    const float* curM = g_tmdTris[k].modelM;
+
+                flushBatchBucket(b);
+
+                // Direct indexed opaque objects in this bucket (non-cached fallback)
+                for (int di = bucketHead[b]; di >= 0; di = s_directObjs[di].nextInBucket) {
+                    const TmdDirectObj* dobj = &s_directObjs[di];
+                    const uint16_t* idxPtr = dobj->staticIndices
+                        ? dobj->staticIndices
+                        : (s_indexPool + dobj->indexOffset);
+                    Marni_DX()->DrawIndexed3DModel(
+                        dobj->vbuf, s_rgbaPool + dobj->rgbaOffset,
+                        idxPtr, dobj->indexCount, dobj->modelM,
+                        (MarniHandle)dobj->tex, MARNI_SAMPLER_POINT,
+                        MARNI_BLEND_ALPHA, true);
+                }
+
+                // Straddling opaque triangles in this bucket
+                if (collected > 0 && triBucketHead[b] >= 0) {
                     int triCount = 0;
-                    for (int j = k; j < collected; j++) {
-                        if (triEmitted[j] || triBucket[j] != (uint8_t)b ||
-                            g_tmdTris[j].tex != curTex || g_tmdTris[j].modelM != curM) {
-                            continue;
-                        }
-                        triEmitted[j] = 1;
-                        memcpy(triVerts + triCount * TMD_TRI_FLOATS, g_tmdTris[j].v, sizeof(g_tmdTris[j].v));
-                        triCount++;
-                        if (triCount >= TMD_MAX_TRIS_FLUSH) {
-                            Marni_DX()->DrawTriangles3DModel(triVerts, triCount, curM,
-                                fg, cx, cy, scaleX, scaleY, (MarniHandle)curTex,
+                    DWORD triTex = 0;
+                    const float* triM = NULL;
+                    for (int k = triBucketHead[b]; k >= 0; k = triNext[k]) {
+                        const TmdTri* t3 = &g_tmdTris[k];
+                        if ((triCount > 0 && (t3->tex != triTex || t3->modelM != triM)) ||
+                            triCount >= TMD_MAX_TRIS_FLUSH) {
+                            Marni_DX()->DrawTriangles3DModel(triVerts, triCount, triM,
+                                fg, cx, cy, scaleX, scaleY, (MarniHandle)triTex,
                                 MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, true);
                             triCount = 0;
                         }
+                        triTex = t3->tex;
+                        triM = t3->modelM;
+                        memcpy(triVerts + triCount * TMD_TRI_FLOATS, t3->v, sizeof(t3->v));
+                        triCount++;
                     }
                     if (triCount > 0) {
-                        Marni_DX()->DrawTriangles3DModel(triVerts, triCount, curM,
-                            fg, cx, cy, scaleX, scaleY, (MarniHandle)curTex,
+                        Marni_DX()->DrawTriangles3DModel(triVerts, triCount, triM,
+                            fg, cx, cy, scaleX, scaleY, (MarniHandle)triTex,
                             MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, true);
                     }
                 }
@@ -916,47 +1428,63 @@ void FlushTmdObjects(void)
                 return a < b;
             });
 
-            int   triCount = 0;
-            DWORD triTex   = 0;
-            bool  triWrite = true;   // depth-WRITE mode of the batch in flight
-            const float* triM = NULL;
+            int k = 0;
+            for (int b = 0; b <= maskCount; b++) {
+                if (b > 0) {
+                    FlushSpriteCommandsRange(maskDepths[b - 1], maskCursor, SPRITE_CLASS_SCENE);
+                    maskCursor = maskDepths[b - 1];
+                    maskIdx = b;
+                }
 
-            for (int k = 0; k < collected; k++) {
-                const TmdTri* t3 = &g_tmdTris[g_tmdTriOrder[k]];
-                const bool triWriteThis = t3->alpha >= 0.999f;
+                // Draw all opaque batched + direct objects in this bucket first (depthWrite = true)
+                flushBatchBucket(b);
+                for (int di = bucketHead[b]; di >= 0; di = s_directObjs[di].nextInBucket) {
+                    const TmdDirectObj* dobj = &s_directObjs[di];
+                    const uint16_t* idxPtr = dobj->staticIndices
+                        ? dobj->staticIndices
+                        : (s_indexPool + dobj->indexOffset);
+                    Marni_DX()->DrawIndexed3DModel(
+                        dobj->vbuf, s_rgbaPool + dobj->rgbaOffset,
+                        idxPtr, dobj->indexCount, dobj->modelM,
+                        (MarniHandle)dobj->tex, MARNI_SAMPLER_POINT,
+                        MARNI_BLEND_ALPHA, true);
+                }
 
-                while (maskIdx < maskCount && (float)maskDepths[maskIdx] > t3->depth) {
-                    if (triCount > 0) {
+                // Draw sorted fallback/translucent triangles in this bucket
+                int   triCount = 0;
+                DWORD triTex   = 0;
+                bool  triWrite = true;
+                const float* triM = NULL;
+
+                while (k < collected) {
+                    const TmdTri* t3 = &g_tmdTris[g_tmdTriOrder[k]];
+                    if (b < maskCount && (float)maskDepths[b] > t3->depth) break;
+
+                    const bool triWriteThis = t3->alpha >= 0.999f;
+                    if ((triCount > 0 && (t3->tex != triTex || triWriteThis != triWrite ||
+                                          t3->modelM != triM)) ||
+                        triCount >= TMD_MAX_TRIS_FLUSH) {
                         Marni_DX()->DrawTriangles3DModel(triVerts, triCount, triM,
                             fg, cx, cy, scaleX, scaleY, (MarniHandle)triTex,
                             MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, triWrite);
                         triCount = 0;
                     }
-                    FlushSpriteCommandsRange(maskDepths[maskIdx], maskCursor, SPRITE_CLASS_SCENE);
-                    maskCursor = maskDepths[maskIdx];
-                    maskIdx++;
+                    triTex = t3->tex;
+                    triWrite = triWriteThis;
+                    triM = t3->modelM;
+                    memcpy(triVerts + triCount * TMD_TRI_FLOATS, t3->v, sizeof(t3->v));
+                    triCount++;
+                    k++;
                 }
-
-                if ((triCount > 0 && (t3->tex != triTex || triWriteThis != triWrite ||
-                                      t3->modelM != triM)) ||
-                    triCount >= TMD_MAX_TRIS_FLUSH) {
+                if (triCount > 0) {
                     Marni_DX()->DrawTriangles3DModel(triVerts, triCount, triM,
                         fg, cx, cy, scaleX, scaleY, (MarniHandle)triTex,
                         MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, triWrite);
-                    triCount = 0;
                 }
-                triTex = t3->tex;
-                triWrite = triWriteThis;
-                triM = t3->modelM;
-                memcpy(triVerts + triCount * TMD_TRI_FLOATS, t3->v, sizeof(t3->v));
-                triCount++;
-            }
-            if (triCount > 0) {
-                Marni_DX()->DrawTriangles3DModel(triVerts, triCount, triM,
-                    fg, cx, cy, scaleX, scaleY, (MarniHandle)triTex,
-                    MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, triWrite);
             }
         }
+
+        Marni_DX()->End3DModelPass();
     }
 
     // The scene sprites nearer than the last triangle - and, when no entity was
@@ -967,6 +1495,9 @@ void FlushTmdObjects(void)
     }
 
     g_tmdQueueCount = 0;
+#ifdef __ZEEBO__
+    ZeeboMemPanel::g_profTmdMs = plat_time_ms() - tmdStartMs;
+#endif
 }
 
 // (0x00481660) - Update entity lighting from RDT point lights
@@ -1173,20 +1704,35 @@ static void FUN_0048c820(float* translation, float* rotMatrix)
 // the screen centre.
 static void FUN_00486190(float* modelMatrix)
 {
-    float from[3];
-    from[0] = 0.0f;
-    from[1] = 0.0f;
-    from[2] = (float)-g_sceneRenderParam;
+    static int   s_cachedParam   = -1;
+    static int   s_cachedSubX    = -1;
+    static int   s_cachedSubY    = -1;
+    static bool  s_cachedValid   = false;
+    static bool  s_viewIsIdent   = false;
+    static float s_cachedView[16];
 
-    float to[3];
-    to[0] = (float)(0xA0 - g_SubpixelOffsetX);
-    to[1] = (float)(g_SubpixelOffsetY + (-0x78));
-    to[2] = 0.0f;
+    if (!s_cachedValid ||
+        s_cachedParam != g_sceneRenderParam ||
+        s_cachedSubX  != g_SubpixelOffsetX  ||
+        s_cachedSubY  != g_SubpixelOffsetY) {
+        s_cachedParam = g_sceneRenderParam;
+        s_cachedSubX  = g_SubpixelOffsetX;
+        s_cachedSubY  = g_SubpixelOffsetY;
+        s_cachedValid = true;
 
-    float viewMatrix[16];
-    FUN_0048cc50(from, to, viewMatrix);
-    FUN_0048c730(modelMatrix, viewMatrix, modelMatrix);
-    FUN_0048c820(modelMatrix + 12, viewMatrix);
+        if (s_cachedSubX == 0xA0 && s_cachedSubY == 0x78) {
+            s_viewIsIdent = true;
+        } else {
+            s_viewIsIdent = false;
+            float from[3] = { 0.0f, 0.0f, (float)-s_cachedParam };
+            float to[3]   = { (float)(0xA0 - s_cachedSubX), (float)(s_cachedSubY - 0x78), 0.0f };
+            FUN_0048cc50(from, to, s_cachedView);
+        }
+    }
+
+    if (s_viewIsIdent) return;
+    FUN_0048c730(modelMatrix, s_cachedView, modelMatrix);
+    FUN_0048c820(modelMatrix + 12, s_cachedView);
 }
 
 // ============================================================================
@@ -1725,17 +2271,29 @@ static void rot_row_xz(float turns, float* row)
 // handled by rot_row_yz (each row's components 1 and 2).
 void matrix_rotate_rows_yz(float turns, float* m)
 {
-    rot_row_yz(turns, m + 0);   // row 0: elements 0,1,2
-    rot_row_yz(turns, m + 4);   // row 1: elements 4,5,6
-    rot_row_yz(turns, m + 8);   // row 2: elements 8,9,10
+    float angle = turns * 6.2831855f;
+    float s = sinf(angle);
+    float c = cosf(angle);
+    for (int i = 0; i < 3; i++) {
+        float* row = m + i * 4;
+        float y = row[1];
+        row[1] = s * row[2] + c * y;
+        row[2] = c * row[2] - s * y;
+    }
 }
 
 // (0x0048cad0) - Rotate the three rows of a 3x4 float matrix about the axis
 // handled by rot_row_xz (each row's components 0 and 2).
 void matrix_rotate_rows_xz(float turns, float* m)
 {
-    rot_row_xz(turns, m + 0);
-    rot_row_xz(turns, m + 4);
-    rot_row_xz(turns, m + 8);
+    float angle = turns * 6.2831855f;
+    float s = sinf(angle);
+    float c = cosf(angle);
+    for (int i = 0; i < 3; i++) {
+        float* row = m + i * 4;
+        float x = row[0];
+        row[0] = s * row[2] + c * x;
+        row[2] = c * row[2] - s * x;
+    }
 }
 

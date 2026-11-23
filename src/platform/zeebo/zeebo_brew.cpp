@@ -4,6 +4,7 @@
 // hardware) can load the compiled .mod binary, create the applet instance,
 // and dispatch EVT_APP_START / EVT_APP_STOP / EVT_KEY / timer ticks.
 #include "zeebo_brew.h"
+#include "zeebo_mempanel.h"
 #include "../platform.h"
 
 #include <string.h>
@@ -75,14 +76,28 @@ static void FrameTimerCallback(void* pUser)
     if (!g_Zeebo.bRunning) {
         return;
     }
-    uint32_t startMs = plat_time_ms();
-    Zeebo_OnFrameTick();
-    uint32_t elapsed = plat_time_ms() - startMs;
+    static uint32_t s_nextFrameMs = 0;
+    uint32_t now = plat_time_ms();
+    if (s_nextFrameMs == 0 || (uint32_t)(now - s_nextFrameMs) > 100u) {
+        s_nextFrameMs = now;
+    }
+    s_nextFrameMs += 33u;
 
-    // Target 33 ms (~30 fps) total frame period matching RE1's original 0x21 ms tick,
-    // while always yielding at least 8 ms so the BREW/emulator event loop stays responsive.
+    uint32_t tickStart = plat_time_ms();
+    Zeebo_OnFrameTick();
+    uint32_t tickElapsed = plat_time_ms() - tickStart;
+    ZeeboMemPanel::g_profTickMs = (tickElapsed > ZeeboMemPanel::g_profSwapMs)
+        ? (tickElapsed - ZeeboMemPanel::g_profSwapMs) : 0u;
+
+    // Target 33 ms (~30 fps) cadence without forcing an 8 ms sleep when a frame
+    // takes 25-32 ms (which pushed frames past 33.3 ms and snapped to 20 fps).
     if (g_Zeebo.bRunning && g_Zeebo.pShell) {
-        int32_t delay = (elapsed >= 25u) ? 8 : (int32_t)(33u - elapsed);
+        uint32_t after = plat_time_ms();
+        int32_t delay = (int32_t)(s_nextFrameMs - after);
+        if (delay < 1) {
+            delay = 1;
+            s_nextFrameMs = after;
+        }
         ISHELL_SetTimer(g_Zeebo.pShell, delay, FrameTimerCallback, NULL);
     }
 }

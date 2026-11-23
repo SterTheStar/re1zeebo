@@ -7,6 +7,7 @@
 #include "MarniGLES1Funcs.h"
 #include "../platform/zeebo/zeebo_brew.h"
 #include "../platform/zeebo/zeebo_mempanel.h"
+#include "../platform/platform.h"
 #include "../game/Types.h"
 
 #include <math.h>
@@ -47,6 +48,9 @@ static void glClearDepthf(float depth) {
 static void glColorPointer(int size, uint32_t type, int stride, const void* ptr) {
     if (auto* gl = ZeeboGL()) gl->glColorPointer(size, type, stride, ptr);
 }
+static void glCullFace(uint32_t mode) {
+    if (auto* gl = ZeeboGL()) gl->glCullFace(mode);
+}
 static void glDeleteTextures(int n, const uint32_t* textures) {
     if (auto* gl = ZeeboGL()) gl->glDeleteTextures(n, textures);
 }
@@ -65,11 +69,17 @@ static void glDisableClientState(uint32_t array) {
 static void glDrawArrays(uint32_t mode, int first, int count) {
     if (auto* gl = ZeeboGL()) gl->glDrawArrays(mode, first, count);
 }
+static void glDrawElements(uint32_t mode, int count, uint32_t type, const void* indices) {
+    if (auto* gl = ZeeboGL()) gl->glDrawElements(mode, count, type, indices);
+}
 static void glEnable(uint32_t cap) {
     if (auto* gl = ZeeboGL()) gl->glEnable(cap);
 }
 static void glEnableClientState(uint32_t array) {
     if (auto* gl = ZeeboGL()) gl->glEnableClientState(array);
+}
+static void glFrontFace(uint32_t mode) {
+    if (auto* gl = ZeeboGL()) gl->glFrontFace(mode);
 }
 static void glGenTextures(int n, uint32_t* textures) {
     if (auto* gl = ZeeboGL()) gl->glGenTextures(n, textures);
@@ -201,14 +211,19 @@ struct MarniDX::Impl {
         int lastFilter = -1;
     } slots[MARNI_MAX_TEXTURES];
 
+    enum ProjMode { PROJ_ORTHO = 0, PROJ_IDENTITY = 1, PROJ_MODEL3D = 2, PROJ_VIEWBATCH = 3 };
     uint32_t boundGlTex = 0;
     bool tex2dEnabled = false;
     int lastBlend = -1;
     bool depthTestEnabled = false;
     bool depthWriteEnabled = true;
-    bool orthoActive = true;
+    bool cullEnabled = false;
+    ProjMode projMode = PROJ_ORTHO;
+    float modelProj[16] = {};
+    float viewBatchProj[16] = {};
+    bool viewBatchProjValid = false;
     bool clientArraysEnabled = false;
-    const Gles1Vertex* lastVertexPtr = NULL;  // cache dos 3 array pointers
+    const void* lastVertexPtr = NULL;  // cache dos 3 array pointers
     int lastPosComponents = 3;
     uint32_t frameDrawCalls = 0;
     uint32_t frameTris = 0;
@@ -219,9 +234,24 @@ struct MarniDX::Impl {
         lastBlend = -1;
         depthTestEnabled = false;
         depthWriteEnabled = true;
-        orthoActive = true;
+        cullEnabled = false;
+        projMode = PROJ_ORTHO;
+        viewBatchProjValid = false;
         lastVertexPtr = NULL;
         lastPosComponents = 3;
+    }
+
+    void SetCullState(bool enable) {
+        if (enable != cullEnabled) {
+            cullEnabled = enable;
+            if (enable) {
+                glEnable(GLES1_CULL_FACE);
+                glCullFace(GLES1_BACK);
+                glFrontFace(GLES1_CW);
+            } else {
+                glDisable(GLES1_CULL_FACE);
+            }
+        }
     }
 
     void SetDepthState(bool test, bool write) {
@@ -308,6 +338,7 @@ struct MarniDX::Impl {
     }
 
     void SubmitTriangles(const Gles1Vertex* v, int vertCount, int posComponents = 3) {
+        SetCullState(false);
         if (!clientArraysEnabled) {
             glEnableClientState(GLES1_VERTEX_ARRAY);
             glEnableClientState(GLES1_TEXTURE_COORD_ARRAY);
@@ -332,8 +363,8 @@ struct MarniDX::Impl {
     }
 
     void SetOrthoProjection() {
-        if (orthoActive) return;
-        orthoActive = true;
+        if (projMode == PROJ_ORTHO) return;
+        projMode = PROJ_ORTHO;
         glMatrixMode(GLES1_PROJECTION);
         glLoadIdentity();
         glOrthof(0.0f, (float)viewW, (float)viewH, 0.0f, 1.0f, -1.0f);
@@ -342,10 +373,60 @@ struct MarniDX::Impl {
     }
 
     void SetIdentityProjection() {
-        if (!orthoActive) return;
-        orthoActive = false;
+        if (projMode == PROJ_IDENTITY) return;
+        projMode = PROJ_IDENTITY;
         glMatrixMode(GLES1_PROJECTION);
         glLoadIdentity();
+        glMatrixMode(GLES1_MODELVIEW);
+        glLoadIdentity();
+    }
+
+    void BuildModel3DProjection(float focal, float cx, float cy,
+                                float scaleX, float scaleY) {
+        float W = (float)viewW;
+        float H = (float)viewH;
+        const float kNearZ = 1.0f, kFarZ = 1000000.0f;
+        float P[16] = {
+            2.0f * focal * scaleX / W, 0.0f, 0.0f, 0.0f,
+            0.0f, 2.0f * focal * scaleY / H, 0.0f, 0.0f,
+            0.0f, 0.0f, (kFarZ + kNearZ) / (kFarZ - kNearZ), 1.0f,
+            cx * 2.0f / W - 1.0f, 1.0f - cy * 2.0f / H,
+            -2.0f * kFarZ * kNearZ / (kFarZ - kNearZ), 0.0f
+        };
+        memcpy(modelProj, P, sizeof(P));
+    }
+
+    void SetModel3DProjection() {
+        if (projMode == PROJ_MODEL3D) return;
+        projMode = PROJ_MODEL3D;
+        glMatrixMode(GLES1_PROJECTION);
+        glLoadMatrixf(modelProj);
+        glMatrixMode(GLES1_MODELVIEW);
+    }
+
+    void BuildViewBatchProjection(float focal, float cx, float cy,
+                                    float scaleX, float scaleY) {
+        float W = (float)viewW;
+        float H = (float)viewH;
+        const float kNearZ = 1.0f, kFarZ = 1000000.0f;
+        // Columns 0..2 scaled by 16 so GLfixed positions (viewPos / 16 in Q16.16)
+        // fit +/-524,287 world units with 1/16th unit precision.
+        float P[16] = {
+            (2.0f * focal * scaleX / W) * 16.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, (2.0f * focal * scaleY / H) * 16.0f, 0.0f, 0.0f,
+            (cx * 2.0f / W - 1.0f) * 16.0f, (1.0f - cy * 2.0f / H) * 16.0f,
+            ((kFarZ + kNearZ) / (kFarZ - kNearZ)) * 16.0f, 16.0f,
+            0.0f, 0.0f, -2.0f * kFarZ * kNearZ / (kFarZ - kNearZ), 0.0f
+        };
+        memcpy(viewBatchProj, P, sizeof(P));
+        viewBatchProjValid = true;
+    }
+
+    void SetViewBatchProjection() {
+        if (projMode == PROJ_VIEWBATCH) return;
+        projMode = PROJ_VIEWBATCH;
+        glMatrixMode(GLES1_PROJECTION);
+        glLoadMatrixf(viewBatchProj);
         glMatrixMode(GLES1_MODELVIEW);
         glLoadIdentity();
     }
@@ -588,7 +669,9 @@ void MarniDX::Present()
     m_pImpl->frameDrawCalls = 0;
     m_pImpl->frameTris      = 0;
     if (g_Zeebo.pEGL && g_Zeebo.pEGL->pvt && m_pImpl->display && m_pImpl->surface) {
+        uint32_t sw0 = plat_time_ms();
         g_Zeebo.pEGL->pvt->eglSwapBuffers(m_pImpl->display, m_pImpl->surface);
+        ZeeboMemPanel::g_profSwapMs = plat_time_ms() - sw0;
     }
 }
 
@@ -867,28 +950,117 @@ void MarniDX::DrawTriangles3DModel(const float* verts, int triCount,
                               v[4], v[5], v[6], v[7], v[8], v[9] };
     }
 
-    // Projecao PS1: sx = cx + vx*focal/vz*scaleX, sy = cy - vy*focal/vz*scaleY.
-    // Coluna-major do GLES: clip = P * (M * modelo).
-    float W = (float)m_pImpl->viewW;
-    float H = (float)m_pImpl->viewH;
-    const float NEAR = 1.0f, FAR = 1000000.0f;
-    float P[16] = {
-        2.0f * focal * scaleX / W, 0.0f, 0.0f, 0.0f,
-        0.0f, 2.0f * focal * scaleY / H, 0.0f, 0.0f,
-        0.0f, 0.0f, (FAR + NEAR) / (FAR - NEAR), 1.0f,
-        cx * 2.0f / W - 1.0f, 1.0f - cy * 2.0f / H,
-        -2.0f * FAR * NEAR / (FAR - NEAR), 0.0f
-    };
-
-    glMatrixMode(GLES1_PROJECTION);
-    glLoadMatrixf(P);
-    glMatrixMode(GLES1_MODELVIEW);
+    if (m_pImpl->projMode != Impl::PROJ_MODEL3D) {
+        m_pImpl->BuildModel3DProjection(focal, cx, cy, scaleX, scaleY);
+        m_pImpl->SetModel3DProjection();
+    }
     glLoadMatrixf(modelMatrix);
-    m_pImpl->orthoActive = false;
 
     m_pImpl->SetDepthState(true, depthWrite);
+    m_pImpl->SetCullState(true);
     m_pImpl->ApplyBlendAndSampler(tex, sampler, blend);
-    m_pImpl->SubmitTriangles(s_scratchVerts, count, 3);
+
+    if (!m_pImpl->clientArraysEnabled) {
+        glEnableClientState(GLES1_VERTEX_ARRAY);
+        glEnableClientState(GLES1_TEXTURE_COORD_ARRAY);
+        glEnableClientState(GLES1_COLOR_ARRAY);
+        m_pImpl->clientArraysEnabled = true;
+    }
+    if (m_pImpl->lastVertexPtr != s_scratchVerts || m_pImpl->lastPosComponents != 3) {
+        glVertexPointer(3, GLES1_FLOAT, sizeof(Gles1Vertex), &s_scratchVerts[0].x);
+        glTexCoordPointer(2, GLES1_FLOAT, sizeof(Gles1Vertex), &s_scratchVerts[0].u);
+        glColorPointer(4, GLES1_FLOAT, sizeof(Gles1Vertex), &s_scratchVerts[0].r);
+        m_pImpl->lastVertexPtr = s_scratchVerts;
+        m_pImpl->lastPosComponents = 3;
+    }
+    glDrawArrays(GLES1_TRIANGLES, 0, count);
+    m_pImpl->frameDrawCalls++;
+    m_pImpl->frameTris += (uint32_t)triCount;
+}
+
+void MarniDX::Begin3DModelPass(float focal, float cx, float cy,
+                                float scaleX, float scaleY)
+{
+    if (!m_pImpl || !m_pImpl->ready) return;
+    m_pImpl->BuildModel3DProjection(focal, cx, cy, scaleX, scaleY);
+    m_pImpl->projMode = Impl::PROJ_MODEL3D;
+    glMatrixMode(GLES1_PROJECTION);
+    glLoadMatrixf(m_pImpl->modelProj);
+    glMatrixMode(GLES1_MODELVIEW);
+    m_pImpl->SetCullState(true);
+}
+
+void MarniDX::DrawIndexed3DModel(const float* vbuf, const uint8_t* rgba,
+                                 const uint16_t* indices, int indexCount,
+                                 const float* modelMatrix,
+                                 MarniHandle tex, MarniSampler sampler,
+                                 MarniBlend blend, bool depthWrite)
+{
+    if (!m_pImpl || !m_pImpl->ready || !vbuf || !rgba || !indices || indexCount <= 0) return;
+
+    m_pImpl->SetModel3DProjection();
+    glLoadMatrixf(modelMatrix);
+    m_pImpl->SetDepthState(true, depthWrite);
+    m_pImpl->SetCullState(true);
+    m_pImpl->ApplyBlendAndSampler(tex, sampler, blend);
+
+    if (!m_pImpl->clientArraysEnabled) {
+        glEnableClientState(GLES1_VERTEX_ARRAY);
+        glEnableClientState(GLES1_TEXTURE_COORD_ARRAY);
+        glEnableClientState(GLES1_COLOR_ARRAY);
+        m_pImpl->clientArraysEnabled = true;
+    }
+    glVertexPointer(3, GLES1_FLOAT, 11 * sizeof(float), vbuf);
+    glTexCoordPointer(2, GLES1_FLOAT, 11 * sizeof(float), vbuf + 9);
+    glColorPointer(4, GLES1_UNSIGNED_BYTE, 4, rgba);
+    m_pImpl->lastVertexPtr = NULL;
+
+    glDrawElements(GLES1_TRIANGLES, indexCount, GLES1_UNSIGNED_SHORT, indices);
+    m_pImpl->frameDrawCalls++;
+    m_pImpl->frameTris += (uint32_t)(indexCount / 3);
+}
+
+void MarniDX::End3DModelPass()
+{
+    if (!m_pImpl || !m_pImpl->ready) return;
+    m_pImpl->SetCullState(false);
+}
+
+void MarniDX::DrawViewBatch3D(const ViewBatchVert* verts,
+                              const uint16_t* indices, int indexCount,
+                              float focal, float cx, float cy,
+                              float scaleX, float scaleY,
+                              MarniHandle tex, MarniSampler sampler,
+                              MarniBlend blend, bool depthWrite)
+{
+    if (!m_pImpl || !m_pImpl->ready || !verts || !indices || indexCount <= 0) return;
+
+    if (m_pImpl->projMode != Impl::PROJ_VIEWBATCH || !m_pImpl->viewBatchProjValid) {
+        m_pImpl->BuildViewBatchProjection(focal, cx, cy, scaleX, scaleY);
+        m_pImpl->projMode = Impl::PROJ_IDENTITY; // force reload below
+        m_pImpl->SetViewBatchProjection();
+    }
+    m_pImpl->SetDepthState(true, depthWrite);
+    m_pImpl->SetCullState(true);
+    m_pImpl->ApplyBlendAndSampler(tex, sampler, blend);
+
+    if (!m_pImpl->clientArraysEnabled) {
+        glEnableClientState(GLES1_VERTEX_ARRAY);
+        glEnableClientState(GLES1_TEXTURE_COORD_ARRAY);
+        glEnableClientState(GLES1_COLOR_ARRAY);
+        m_pImpl->clientArraysEnabled = true;
+    }
+    if (m_pImpl->lastVertexPtr != verts || m_pImpl->lastPosComponents != 0x100) {
+        glVertexPointer(3, GLES1_FIXED, sizeof(ViewBatchVert), &verts[0].x);
+        glTexCoordPointer(2, GLES1_FIXED, sizeof(ViewBatchVert), &verts[0].u);
+        glColorPointer(4, GLES1_UNSIGNED_BYTE, sizeof(ViewBatchVert), &verts[0].r);
+        m_pImpl->lastVertexPtr = verts;
+        m_pImpl->lastPosComponents = 0x100;
+    }
+
+    glDrawElements(GLES1_TRIANGLES, indexCount, GLES1_UNSIGNED_SHORT, indices);
+    m_pImpl->frameDrawCalls++;
+    m_pImpl->frameTris += (uint32_t)(indexCount / 3);
 }
 
 BOOL MarniDX::CaptureBackbufferToRGBA(void** outPixels, DWORD* outWidth, DWORD* outHeight)

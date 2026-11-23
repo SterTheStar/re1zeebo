@@ -16,6 +16,12 @@ void Toggle(void);
 // Draw the top-left overlay panel (call right before eglSwapBuffers in MarniDX::Present).
 void Draw(MarniDX* dx, uint32_t drawCalls, uint32_t tris, int activeTextures, int maxTextures);
 
+// Per-frame timing accumulators (ms) for CPU hotspot diagnosis.
+extern uint32_t g_profTickMs;
+extern uint32_t g_profEntMs;
+extern uint32_t g_profTmdMs;
+extern uint32_t g_profSwapMs;
+
 } // namespace ZeeboMemPanel
 
 #endif // __ZEEBO__

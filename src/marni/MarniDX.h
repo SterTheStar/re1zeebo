@@ -12,6 +12,7 @@
 // or xinput.h. Only <windows.h> + MarniBits.h are permitted.
 #pragma once
 
+#include <stdint.h>
 #include "../platform/types.h"
 #include "MarniBits.h"
 
@@ -232,6 +233,33 @@ public:
                               float scaleX, float scaleY,
                               MarniHandle tex, MarniSampler sampler,
                               MarniBlend blend, bool depthWrite);
+
+    // Indexed 3D model path (zero-copy vertex positions/UVs from CMarniViewport2,
+    // uint8_t RGBA colors, GLES1 hardware T&L + backface culling).
+    void Begin3DModelPass(float focal, float cx, float cy,
+                          float scaleX, float scaleY);
+    void DrawIndexed3DModel(const float* vbuf, const uint8_t* rgba,
+                            const uint16_t* indices, int indexCount,
+                            const float* modelMatrix,
+                            MarniHandle tex, MarniSampler sampler,
+                            MarniBlend blend, bool depthWrite);
+    void End3DModelPass();
+
+    // Batched view-space fixed-point 3D submission: vertices are already
+    // transformed to view-space (pos = Q16.16 of viewPos/16, uv = Q16.16,
+    // color = uint8_t RGBA, 24 bytes stride) so multiple joints/objects
+    // sharing a texture are drawn in a single glDrawElements call.
+    struct ViewBatchVert {
+        int32_t x, y, z;
+        int32_t u, v;
+        uint8_t r, g, b, a;
+    };
+    void DrawViewBatch3D(const ViewBatchVert* verts,
+                         const uint16_t* indices, int indexCount,
+                         float focal, float cx, float cy,
+                         float scaleX, float scaleY,
+                         MarniHandle tex, MarniSampler sampler,
+                         MarniBlend blend, bool depthWrite);
 
     // ----------------------------------------------------------------------
     // Backbuffer readback (used by CMarniBits::SaveBitmapToFile, the original

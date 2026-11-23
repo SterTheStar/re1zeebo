@@ -49,6 +49,19 @@ static uint32_t s_frameMs      = 0;
 static uint32_t s_avgDc        = 0;
 static uint32_t s_avgTris      = 0;
 
+uint32_t g_profTickMs = 0;
+uint32_t g_profEntMs  = 0;
+uint32_t g_profTmdMs  = 0;
+uint32_t g_profSwapMs = 0;
+static uint32_t s_winTickSum = 0;
+static uint32_t s_winEntSum  = 0;
+static uint32_t s_winTmdSum  = 0;
+static uint32_t s_winSwapSum = 0;
+static uint32_t s_avgTickMs  = 0;
+static uint32_t s_avgEntMs   = 0;
+static uint32_t s_avgTmdMs   = 0;
+static uint32_t s_avgSwapMs  = 0;
+
 // Compact 5x7 bitmap font atlas (ASCII 32..95, 16 cols x 4 rows of 6x8 cells -> 128x32)
 static MarniHandle s_fontTex   = MARNI_NULL_HANDLE;
 static bool        s_fontTried = false;
@@ -302,20 +315,32 @@ void Draw(MarniDX* dx, uint32_t drawCalls, uint32_t tris, int activeTextures, in
 		s_winStartMs = now;
 	}
 	s_winFrames++;
-	s_winDcSum  += drawCalls;
-	s_winTriSum += tris;
+	s_winDcSum   += drawCalls;
+	s_winTriSum  += tris;
+	s_winTickSum += g_profTickMs;
+	s_winEntSum  += g_profEntMs;
+	s_winTmdSum  += g_profTmdMs;
+	s_winSwapSum += g_profSwapMs;
 	uint32_t elapsed = now - s_winStartMs;
 	if (elapsed >= 500u || s_winFrames >= 15u) {
 		if (elapsed > 0u) {
 			s_realFps = (s_winFrames * 1000u) / elapsed;
 			s_frameMs = elapsed / s_winFrames;
 		}
-		s_avgDc   = s_winDcSum / s_winFrames;
-		s_avgTris = s_winTriSum / s_winFrames;
+		s_avgDc     = s_winDcSum / s_winFrames;
+		s_avgTris   = s_winTriSum / s_winFrames;
+		s_avgTickMs = s_winTickSum / s_winFrames;
+		s_avgEntMs  = s_winEntSum / s_winFrames;
+		s_avgTmdMs  = s_winTmdSum / s_winFrames;
+		s_avgSwapMs = s_winSwapSum / s_winFrames;
 		s_winStartMs = now;
 		s_winFrames  = 0;
 		s_winDcSum   = 0;
 		s_winTriSum  = 0;
+		s_winTickSum = 0;
+		s_winEntSum  = 0;
+		s_winTmdSum  = 0;
+		s_winSwapSum = 0;
 	}
 
 	RefreshHeapStats();
@@ -327,9 +352,9 @@ void Draw(MarniDX* dx, uint32_t drawCalls, uint32_t tris, int activeTextures, in
 	const int lineH  = 15;
 	const int barH   = 7;
 #ifdef AEE_SIMULATOR
-	const int numLines = 7;
+	const int numLines = 8;
 #else
-	const int numLines = 6;
+	const int numLines = 7;
 #endif
 	const int panelH = 14 + barH + numLines * lineH + 8;
 
@@ -433,6 +458,13 @@ void Draw(MarniDX* dx, uint32_t drawCalls, uint32_t tris, int activeTextures, in
 	// Line 6: Active MarniDX Textures
 	snprintf(line, sizeof(line), "TEX %d/%d", activeTextures, maxTextures);
 	EmitLine(tx, ty, scale, line, colDim);
+	ty += (float)lineH;
+
+	// Line 7: CPU stage breakdown (ms)
+	snprintf(line, sizeof(line), "CPU %u ENT %u TMD %u SWP %u",
+	         (unsigned)s_avgTickMs, (unsigned)s_avgEntMs,
+	         (unsigned)s_avgTmdMs, (unsigned)s_avgSwapMs);
+	EmitLine(tx, ty, scale, line, colCyan);
 
 #ifdef AEE_SIMULATOR
 	ty += (float)lineH;
