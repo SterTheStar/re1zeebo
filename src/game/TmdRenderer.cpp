@@ -155,6 +155,7 @@ struct TmdTri {
                    // every shadow once they became depth-tested.
     int   otDepth; // the ordering-table depth its object was queued at. Only
                    // used to break exact `depth` ties - see the sort below.
+    const float* modelM; // matriz do objeto (transform feito no GLES1)
 };
 static TmdTri g_tmdTris[TMD_MAX_TRIS_COLLECT];
 static int    g_tmdTriOrder[TMD_MAX_TRIS_COLLECT];
@@ -767,22 +768,21 @@ void FlushTmdObjects(void)
                     const float* v0 = vbuf + i0 * 11;
                     const float* v1 = vbuf + i1 * 11;
                     const float* v2 = vbuf + i2 * 11;
-                    o[0]  = x0; o[1]  = y0; o[2]  = TmdDepthNdc(vzArr[i0]);
-                    o[3]  = vzArr[i0];
+                    // Posicao do MODELO: o GLES1 aplica M e a projecao.
+                    o[0]  = v0[0]; o[1]  = v0[1]; o[2]  = v0[2]; o[3]  = 1.0f;
                     o[4]  = v0[9];  o[5]  = v0[10];
                     o[6]  = cr[i0]; o[7]  = cg[i0]; o[8]  = cb[i0]; o[9]  = triAlpha;
-                    o[10] = x1; o[11] = y1; o[12] = TmdDepthNdc(vzArr[i1]);
-                    o[13] = vzArr[i1];
+                    o[10] = v1[0]; o[11] = v1[1]; o[12] = v1[2]; o[13] = 1.0f;
                     o[14] = v1[9];  o[15] = v1[10];
                     o[16] = cr[i1]; o[17] = cg[i1]; o[18] = cb[i1]; o[19] = triAlpha;
-                    o[20] = x2; o[21] = y2; o[22] = TmdDepthNdc(vzArr[i2]);
-                    o[23] = vzArr[i2];
+                    o[20] = v2[0]; o[21] = v2[1]; o[22] = v2[2]; o[23] = 1.0f;
                     o[24] = v2[9];  o[25] = v2[10];
                     o[26] = cr[i2]; o[27] = cg[i2]; o[28] = cb[i2]; o[29] = triAlpha;
                     t3->depth = (vzArr[i0] + vzArr[i1] + vzArr[i2]) * (1.0f / 3.0f);
                     t3->tex   = tex;
                     t3->alpha = triAlpha;
                     t3->otDepth = e->depth;
+                    t3->modelM = M;
                     g_tmdTriOrder[collected] = collected;
                     collected++;
 
@@ -814,6 +814,7 @@ void FlushTmdObjects(void)
                         k3->tex     = (DWORD)knockTex;
                         k3->alpha   = triAlpha;
                         k3->otDepth = e->depth;
+                        k3->modelM  = M;
                         g_tmdTriOrder[collected] = collected;
                         collected++;
                     }
@@ -882,23 +883,27 @@ void FlushTmdObjects(void)
                 for (int k = 0; k < collected; k++) {
                     if (triEmitted[k] || triBucket[k] != (uint8_t)b) continue;
                     DWORD curTex = g_tmdTris[k].tex;
+                    const float* curM = g_tmdTris[k].modelM;
                     int triCount = 0;
                     for (int j = k; j < collected; j++) {
-                        if (triEmitted[j] || triBucket[j] != (uint8_t)b || g_tmdTris[j].tex != curTex) {
+                        if (triEmitted[j] || triBucket[j] != (uint8_t)b ||
+                            g_tmdTris[j].tex != curTex || g_tmdTris[j].modelM != curM) {
                             continue;
                         }
                         triEmitted[j] = 1;
                         memcpy(triVerts + triCount * TMD_TRI_FLOATS, g_tmdTris[j].v, sizeof(g_tmdTris[j].v));
                         triCount++;
                         if (triCount >= TMD_MAX_TRIS_FLUSH) {
-                            Marni_DX()->DrawTriangles3D(triVerts, triCount, (MarniHandle)curTex,
-                                                        MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, true);
+                            Marni_DX()->DrawTriangles3DModel(triVerts, triCount, curM,
+                                fg, cx, cy, scaleX, scaleY, (MarniHandle)curTex,
+                                MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, true);
                             triCount = 0;
                         }
                     }
                     if (triCount > 0) {
-                        Marni_DX()->DrawTriangles3D(triVerts, triCount, (MarniHandle)curTex,
-                                                    MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, true);
+                        Marni_DX()->DrawTriangles3DModel(triVerts, triCount, curM,
+                            fg, cx, cy, scaleX, scaleY, (MarniHandle)curTex,
+                            MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, true);
                     }
                 }
             }
@@ -914,6 +919,7 @@ void FlushTmdObjects(void)
             int   triCount = 0;
             DWORD triTex   = 0;
             bool  triWrite = true;   // depth-WRITE mode of the batch in flight
+            const float* triM = NULL;
 
             for (int k = 0; k < collected; k++) {
                 const TmdTri* t3 = &g_tmdTris[g_tmdTriOrder[k]];
@@ -921,9 +927,9 @@ void FlushTmdObjects(void)
 
                 while (maskIdx < maskCount && (float)maskDepths[maskIdx] > t3->depth) {
                     if (triCount > 0) {
-                        Marni_DX()->DrawTriangles3D(triVerts, triCount, (MarniHandle)triTex,
-                                                    MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA,
-                                                    triWrite);
+                        Marni_DX()->DrawTriangles3DModel(triVerts, triCount, triM,
+                            fg, cx, cy, scaleX, scaleY, (MarniHandle)triTex,
+                            MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, triWrite);
                         triCount = 0;
                     }
                     FlushSpriteCommandsRange(maskDepths[maskIdx], maskCursor, SPRITE_CLASS_SCENE);
@@ -931,22 +937,24 @@ void FlushTmdObjects(void)
                     maskIdx++;
                 }
 
-                if ((triCount > 0 && (t3->tex != triTex || triWriteThis != triWrite)) ||
+                if ((triCount > 0 && (t3->tex != triTex || triWriteThis != triWrite ||
+                                      t3->modelM != triM)) ||
                     triCount >= TMD_MAX_TRIS_FLUSH) {
-                    Marni_DX()->DrawTriangles3D(triVerts, triCount, (MarniHandle)triTex,
-                                                MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA,
-                                                triWrite);
+                    Marni_DX()->DrawTriangles3DModel(triVerts, triCount, triM,
+                        fg, cx, cy, scaleX, scaleY, (MarniHandle)triTex,
+                        MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, triWrite);
                     triCount = 0;
                 }
                 triTex = t3->tex;
                 triWrite = triWriteThis;
+                triM = t3->modelM;
                 memcpy(triVerts + triCount * TMD_TRI_FLOATS, t3->v, sizeof(t3->v));
                 triCount++;
             }
             if (triCount > 0) {
-                Marni_DX()->DrawTriangles3D(triVerts, triCount, (MarniHandle)triTex,
-                                            MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA,
-                                            triWrite);
+                Marni_DX()->DrawTriangles3DModel(triVerts, triCount, triM,
+                    fg, cx, cy, scaleX, scaleY, (MarniHandle)triTex,
+                    MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, triWrite);
             }
         }
     }

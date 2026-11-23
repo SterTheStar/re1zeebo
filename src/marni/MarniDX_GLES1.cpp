@@ -77,6 +77,11 @@ static void glGenTextures(int n, uint32_t* textures) {
 static void glLoadIdentity(void) {
     if (auto* gl = ZeeboGL()) gl->glLoadIdentity();
 }
+static void glLoadMatrixf(const float* m) {
+    GLfixed f[16];
+    for (int i = 0; i < 16; ++i) f[i] = ToFixed16(m[i]);
+    if (auto* gl = ZeeboGL()) gl->glLoadMatrixx(f);
+}
 static void glMatrixMode(uint32_t mode) {
     if (auto* gl = ZeeboGL()) gl->glMatrixMode(mode);
 }
@@ -843,6 +848,47 @@ void MarniDX::DrawTriangles3D(const float* verts, int triCount, MarniHandle tex,
     m_pImpl->SetIdentityProjection();
     m_pImpl->ApplyBlendAndSampler(tex, sampler, blend);
     m_pImpl->SubmitTriangles(s_scratchVerts, count, 4);
+}
+
+void MarniDX::DrawTriangles3DModel(const float* verts, int triCount,
+                                   const float* modelMatrix,
+                                   float focal, float cx, float cy,
+                                   float scaleX, float scaleY,
+                                   MarniHandle tex, MarniSampler sampler,
+                                   MarniBlend blend, bool depthWrite)
+{
+    if (!m_pImpl || !m_pImpl->ready || !verts || triCount <= 0) return;
+    if (triCount > 1024) triCount = 1024;
+    int count = triCount * 3;
+
+    for (int i = 0; i < count; ++i) {
+        const float* v = verts + i * 10;
+        s_scratchVerts[i] = { v[0], v[1], v[2], 1.0f,
+                              v[4], v[5], v[6], v[7], v[8], v[9] };
+    }
+
+    // Projecao PS1: sx = cx + vx*focal/vz*scaleX, sy = cy - vy*focal/vz*scaleY.
+    // Coluna-major do GLES: clip = P * (M * modelo).
+    float W = (float)m_pImpl->viewW;
+    float H = (float)m_pImpl->viewH;
+    const float NEAR = 1.0f, FAR = 1000000.0f;
+    float P[16] = {
+        2.0f * focal * scaleX / W, 0.0f, 0.0f, 0.0f,
+        0.0f, 2.0f * focal * scaleY / H, 0.0f, 0.0f,
+        0.0f, 0.0f, (FAR + NEAR) / (FAR - NEAR), 1.0f,
+        cx * 2.0f / W - 1.0f, 1.0f - cy * 2.0f / H,
+        -2.0f * FAR * NEAR / (FAR - NEAR), 0.0f
+    };
+
+    glMatrixMode(GLES1_PROJECTION);
+    glLoadMatrixf(P);
+    glMatrixMode(GLES1_MODELVIEW);
+    glLoadMatrixf(modelMatrix);
+    m_pImpl->orthoActive = false;
+
+    m_pImpl->SetDepthState(true, depthWrite);
+    m_pImpl->ApplyBlendAndSampler(tex, sampler, blend);
+    m_pImpl->SubmitTriangles(s_scratchVerts, count, 3);
 }
 
 BOOL MarniDX::CaptureBackbufferToRGBA(void** outPixels, DWORD* outWidth, DWORD* outHeight)

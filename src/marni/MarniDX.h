@@ -223,6 +223,16 @@ public:
                          MarniBlend  blend   = MARNI_BLEND_ALPHA,
                          bool depthWrite = true);
 
+    // GPU-side transform: verts traz posicao do MODELO em [0..2], uv em [4..5]
+    // e rgba em [6..9]. O GLES1 aplica modelMatrix e a projecao perspective
+    // construida a partir dos parametros da camera PS1.
+    void DrawTriangles3DModel(const float* verts, int triCount,
+                              const float* modelMatrix,
+                              float focal, float cx, float cy,
+                              float scaleX, float scaleY,
+                              MarniHandle tex, MarniSampler sampler,
+                              MarniBlend blend, bool depthWrite);
+
     // ----------------------------------------------------------------------
     // Backbuffer readback (used by CMarniBits::SaveBitmapToFile, the original
     // +0x2064 framebuffer-proxy path). Allocates a contiguous RGBA8 buffer via
