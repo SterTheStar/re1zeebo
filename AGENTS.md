@@ -238,6 +238,16 @@ sobre BREW.
 - Todo caminho é relativo à raiz VFS do módulo (`/mod/<app>/`).
   `plat_normalize_path` remove `./` ou `.\` e converte `\` em `/`, colapsando
   barras repetidas. `plat_exe_dir` devolve `"."`.
+- **Nenhuma escrita sai da pasta do app**: `plat_write_path_safe` (em
+  `platform.cpp`, declarado em `platform.h`) é chamado por `plat_file_write`,
+  `plat_mkdir` e pelo `_open` dos `fopen(...,"w"/"wb")` dos saves. Recusa
+  absolutos (`/`, `\`), prefixos de drive/esquema (`C:`, `fs:`, `mmc4:`) e
+  segmentos `..`. Motivo: IFileMgr resolveria isso no filesystem do dispositivo
+  e poderia chegar à NAND de 128 MB do sistema — ver §20.
+- Saves: `SAVE/savedat1.dat` … `savedat16.dat` (2690 B cada, `SAVE_FILE_SIZE
+  = 0xA86` em `SaveLoadScreen.cpp`), `SAVE/bonus.dat` (32 B) e
+  `SAVE/batrank.dat`. `GetSaveRoot()` resolve para `SAVE/` e a pasta é criada
+  com `plat_mkdir`. Total ~45 KB, abaixo do limite de 64 KB do guia Zeebo.
 - `plat_file_read_all` usa `IFile::GetInfo` + `Read` em loop, com padding de 16
   bytes; `plat_file_write` usa `_OFM_READWRITE|_OFM_CREATE` + `Truncate(0)`;
   `plat_dir_list` faz duas passagens (dirs, depois arquivos) com
@@ -390,12 +400,14 @@ struct ArmTaskContext {   // 10 uint32_t = 40 bytes
 - **BREW Simulator**: DLL de `build/zeebo_sim`; `SimTrace` e `Zeebo_Log`
   escrevem em `C:\Users\Esther\AppData\Local\Temp\re1_sim.log` (caminho fixo —
   atualize se trocar de máquina).
-- **No console**: `Zeebo_Log` escreve em `re1_zeebo.log` via `IFileMgr` e em
-  `pfnDbgPrintf`; `crashlog_mark("etapa")` deixa breadcrumbs no startup.
+- **No console**: `Zeebo_Log` usa **apenas** `pfnDbgPrintf` — o arquivo
+  `re1_zeebo.log` via `IFileMgr` está **desligado no hardware** (`#ifdef
+  AEE_SIMULATOR` em `crash.cpp`) para não deixar vestígio crescente na flash.
+  `crashlog_mark("etapa")` deixa breadcrumbs no startup.
 - **Painel na tela**: `zeebo_mempanel.cpp` mostra draw calls, triângulos e
   texturas ativas no canto superior esquerdo; toggle com START + ↓.
-- **Erros de inicialização**: `plat_fatal` fecha o applet — leia
-  `re1_zeebo.log`/`re1_sim.log` antes de supor que o jogo "não abre".
+- **Erros de inicialização**: `plat_fatal` fecha o applet — no hardware, leia
+  o `pfnDbgPrintf`; no simulador, `re1_sim.log`.
 - Caminhos fixos conhecidos (não portáteis): `ZEEBO_ELF2MOD` no
   `CMakeLists.zeebo.txt`, toolchain e logs do simulador. Ajuste ao migrar.
 
@@ -580,8 +592,8 @@ intercepta tres pontos, todos transparentes para `src/game/`:
 
 Nomes consultados como `.\usa\MOVIE\PU.avi`, `assets/...`, `USA/...` e
 maiúsculas/minúsculas misturadas sao normalizados antes da busca binaria no
-indice. `config.ini`, saves, `bonus.dat` e `re1_zeebo.log` **ficam soltos**
-(fora do PAK) porque precisam de escrita.
+indice. `config.ini`, saves, `bonus.dat` e `batrank.dat` **ficam soltos** (fora
+do PAK) porque precisam de escrita; `re1_zeebo.log` só existe no simulador.
 
 Plano B se o emulador/hardware nao abrir um arquivo de 341 MB: dividir em
 2–3 PAKs por categoria com o mesmo formato — o indice e por arquivo, entao a
@@ -629,3 +641,42 @@ O decoder incremental foi validado com harness MSVC: PCM gerado identico ao
 - `tools/zeebo/` — `elf2mod.x`, `zeebo_mod.ld`, `re1pack.py`, `make_pak.py`,
   `adpcm_fast.c`, `package_mod.py`.
 - `src/platform/zeebo/zeebo_brew.h` — todas as estruturas/CLSIDs/constantes BREW usadas pelo port.
+
+## 20. Armazenamento e regra da NAND (LEIA ANTES DE INSTALAR)
+
+O Zeebo tem **duas** memórias flash internas — confundi-las é o erro clássico
+que "ferra com tudo":
+
+| Memória | Tamanho | Conteúdo |
+|---|---|---|
+| NAND (MCP com a SDRAM) | 128 MB | bootloaders, BREW/Rex/L4, sistema, logs do sistema, **Z-Wheel** e assets. Livre: 30–60 MB. |
+| eNAND (eMMC, montada em `/mmc4/`) | 1 GB | jogos/apps (`mif/`, `mod/<id>/`) e **saves** (`mod/<id>/udata/`). |
+| SD | ≤32 GB | slot nunca usado oficialmente; só EMAPPLET/Media Player. |
+
+**Regra de ouro:** este pacote tem 352 MB e **não cabe na NAND de 128 MB**.
+Instale com `mif/`+`mod/` no SD via **EMAPPLET → Field Test → Memory Copy**
+(destino: eNAND) e abra pelo **Appmgr**. **Nunca coloque na Z-Wheel**: o
+**ZeeboMCP** copia o jogo da eNAND para a NAND antes de rodar e, se não
+conseguir mover a cópia de volta ao sair, deixa `zmcp.dat` + parte do jogo na
+NAND, esgotando o espaço e causando instabilidade. Nosso desligamento é limpo
+(`ISHELL_CloseApplet` → `EVT_APP_STOP` → `Zeebo_OnAppStop`), o que ajuda o
+ZeeboMCP a limpar; um crash ainda pode deixar vestígio — isso é do sistema.
+
+**Escritas do port** (todas relativas, resolvidas em `/mod/990001/` na eNAND):
+
+| Arquivo | Tamanho | Caminho no código |
+|---|---|---|
+| `SAVE/savedat1..16.dat` | 2690 B × 16 | `SaveLoadScreen.cpp:435` (`fopen "wb"`) → `_open` → `IFile::Write` |
+| `SAVE/bonus.dat` | 32 B | `Bonus.cpp:89` (`plat_file_write`) |
+| `SAVE/batrank.dat` | ~1 KB | `SaturnBattle.cpp:1132` |
+| `config.ini` | ~alguns KB | `ConfigFile.cpp:670` (`fopen "w"`), no shutdown |
+| `re1_zeebo.log` | **nenhum no hardware** | `crash.cpp` — `#ifdef AEE_SIMULATOR` |
+
+`RE1DATA.PAK` é aberto com `_OFM_READ` (`re1_archive.cpp:105`) e **jamais**
+escrito. `plat_write_path_safe` barra qualquer escrita que tente sair da pasta
+do app (absoluto, `fs:`, drive, `..`). O guia oficial limita saves a 64 KB;
+nosso pior caso normal é ~45 KB.
+
+Fontes: `https://www.tripleoxygen.net/wiki/console/zeebo/nand`,
+`.../sistema_de_arquivos`, `.../hardware/enand` e o `ZeeboDeveloperGuide0.97.pdf`
+(§5.1 — filesystem de 1 GB, máximo 64 KB de save).

@@ -48,6 +48,36 @@ const char* plat_normalize_path(const char* path, char* buffer, size_t size)
     return buffer;
 }
 
+// Nenhuma escrita pode sair do diretorio privado do app (/mod/990001/ na
+// eNAND de 1 GB). IFileMgr interpreta "fs:/..." como caminho absoluto do
+// dispositivo e ".." para subir de diretorio; ambos podem terminar na NAND
+// de 128 MB do sistema (logs, Z-Wheel, copia do ZeeboMCP).
+const char* plat_write_path_safe(const char* path, char* buffer, size_t size)
+{
+    if (!path || !buffer || size == 0) return NULL;
+    if (path[0] == '/' || path[0] == '\\') return NULL;   // absoluto
+    // Qualquer esquema/drive antes da primeira barra: "C:", "fs:", "mmc4:".
+    // ("fs:/..." tem path[1]=='s', entao checar so path[1]==':' nao bastaria.)
+    for (const char* p = path; *p != '\0' && *p != '/' && *p != '\\'; ++p) {
+        if (*p == ':') return NULL;
+    }
+
+    const char* norm = plat_normalize_path(path, buffer, size);
+    if (!norm || norm[0] == '\0') return NULL;
+
+    for (const char* p = norm; *p != '\0'; ++p) {
+        if (p[0] == '.' && p[1] == '.') {
+            boolean atStart = (p == norm);
+            boolean afterSlash = (p > norm && p[-1] == '/');
+            boolean beforeSlash = (p[2] == '/');
+            boolean beforeEnd = (p[2] == '\0');
+            // Segmento ".." exato (delimitado por '/' ou pelo fim da string).
+            if ((atStart || afterSlash) && (beforeSlash || beforeEnd)) return NULL;
+        }
+    }
+    return norm;
+}
+
 BOOL plat_exe_dir(char* out, size_t size)
 {
     if (!out || size < 2) {
@@ -73,7 +103,7 @@ BOOL plat_mkdir(const char* path)
         return FALSE;
     }
     char norm[260];
-    plat_normalize_path(path, norm, sizeof(norm));
+    if (!plat_write_path_safe(path, norm, sizeof(norm))) return FALSE;
     int rc = g_Zeebo.pFileMgr->pvt->MkDir(g_Zeebo.pFileMgr, norm);
     return (rc == AEE_SUCCESS || rc == EFILEEXISTS) ? TRUE : FALSE;
 }
@@ -109,7 +139,10 @@ BOOL plat_file_write(const char* path, const void* data, size_t size)
         return FALSE;
     }
     char norm[260];
-    plat_normalize_path(path, norm, sizeof(norm));
+    if (!plat_write_path_safe(path, norm, sizeof(norm))) {
+        Zeebo_Log("[WRITE] caminho recusado (fora do app): '%s'\n", path);
+        return FALSE;
+    }
 
     IFile* f = g_Zeebo.pFileMgr->pvt->OpenFile(
         g_Zeebo.pFileMgr, norm, (OpenFileMode)(_OFM_READWRITE | _OFM_CREATE));

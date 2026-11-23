@@ -75,6 +75,14 @@ BOOL plat_dir_list(const char* path, PlatDirVisit visit, void* user);
 // Replaces the CreateFileA/WriteFile pair in MarniBits::SaveBitmapToFile.
 BOOL plat_file_write(const char* path, const void* data, size_t size);
 
+// Zeebo only: normalize a path for a WRITE and refuse anything that would
+// escape the applet's private directory (/mod/<app>/ on the eNAND). Returns
+// NULL for absolute paths, drive/scheme prefixes ("C:", "fs:", "mmc4:") and
+// any ".." component. Every write primitive must call this before IFileMgr;
+// a relative name that escapes could land on the device file system, and
+// ultimately on the 128 MB system NAND (ZeeboMCP/Z-Wheel territory).
+const char* plat_write_path_safe(const char* path, char* buffer, size_t size);
+
 // How many bytes are readable from `p` up to the end of the committed,
 // accessible memory region containing it. Returns 0 when the address is not
 // readable. Replaces the VirtualQuery calls that clamp a truncated TIM page.

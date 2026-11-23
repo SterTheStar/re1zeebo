@@ -6,7 +6,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef AEE_SIMULATOR
 static IFile* s_logFile = NULL;
+#endif
 
 extern "C" void Zeebo_Log(const char* fmt, ...)
 {
@@ -32,6 +34,11 @@ extern "C" void Zeebo_Log(const char* fmt, ...)
         g_Zeebo.pHelpers->pfnDbgPrintf("%s", buf);
     }
 
+#ifdef AEE_SIMULATOR
+    // Log em arquivo SOMENTE no simulador (depuracao). No hardware fica
+    // desligado: toda escrita IFileMgr vai para a flash interna do app, e um
+    // log crescente deixaria "vestigios". O pfnDbgPrintf acima nao cria
+    // arquivo algum.
     if (g_Zeebo.pFileMgr && g_Zeebo.pFileMgr->pvt) {
         if (!s_logFile) {
             s_logFile = g_Zeebo.pFileMgr->pvt->OpenFile(
@@ -42,6 +49,9 @@ extern "C" void Zeebo_Log(const char* fmt, ...)
             s_logFile->pvt->Write(s_logFile, buf, (uint32_t)n);
         }
     }
+#else
+    (void)buf;
+#endif
 }
 
 void crashlog_install(void)

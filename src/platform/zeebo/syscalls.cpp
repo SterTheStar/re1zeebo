@@ -91,11 +91,20 @@ int _open(const char* name, int flags, ...)
         return -1;
     }
 
-    // Normalize path via plat_normalize_path (strips leading ./ and converts \)
-    char norm[260];
-    plat_normalize_path(name, norm, sizeof(norm));
-
     int acc = flags & 3;
+
+    // Leitura: normalizacao simples. Escrita: filtro anti-escape — nada pode
+    // sair de /mod/<app>/ na eNAND e parar na NAND de 128 MB do sistema.
+    char norm[260];
+    if (acc != 0) {
+        if (!plat_write_path_safe(name, norm, sizeof(norm))) {
+            errno = EACCES;
+            return -1;
+        }
+    } else {
+        plat_normalize_path(name, norm, sizeof(norm));
+    }
+
     OpenFileMode mode = _OFM_READ;
     if (acc == 1 || acc == 2) {
         mode = _OFM_READWRITE;

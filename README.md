@@ -42,12 +42,39 @@ São **352 MB** em vez de 598 MB. Os dados vêm em LZ4 e o áudio em ADPCM 4-bit
 o módulo descompacta tudo transparentemente na leitura. O áudio é tocado em
 **streaming** direto do PAK (`ISource` + `AEECLSID_MEDIAPCM`), então nem o PCM
 dos filmes nem os bancos de som ficam inteiros na RAM — só ~8 KB por voz.
-Basta copiar a pasta para o SD (ou carregar no Zeebx). `config.ini`, saves e
-logs continuam soltos.
+Basta copiar a pasta para o SD (ou carregar no Zeebx). `config.ini` e saves
+continuam soltos; o log em arquivo é desligado no hardware (só o simulador
+escreve `re1_zeebo.log`).
 
 Os arquivos crus do PC não são mais incluídos no repositório. Se precisar
 regerar, copie `USA/` de uma instalação GOG/retail para uma pasta temporária
 e siga `AGENTS.md` §18 (que inclui a geração do `RE1DATA.PAK`).
+
+---
+
+## Instalação no console — cuidado com a NAND
+
+O Zeebo tem **duas** memórias flash internas:
+
+| Memória | Tamanho | O que guarda |
+| :--- | :--- | :--- |
+| **NAND** | 128 MB | bootloaders, BREW, sistema, logs do sistema, **Z-Wheel** |
+| **eNAND** | 1 GB | jogos/apps (`/mmc4/mod/<id>/`) e **saves** (`udata/`) |
+
+Este pacote tem **352 MB** — **não cabe na NAND**. Por isso:
+
+1. Copie `mif/` e `mod/` para um cartão SD e rode **EMAPPLET → Field Test →
+   Memory Copy** para instalar na **eNAND**.
+2. Abra o jogo pelo **Appmgr**.
+3. **Nunca adicione este jogo à Z-Wheel.** O ZeeboMCP copia o jogo da eNAND
+   para a NAND antes de executá-lo; se não conseguir devolver a cópia ao sair,
+   sobra um `zmcp.dat` e parte do jogo na NAND, esgotando os 30–60 MB livres e
+   desestabilizando o console.
+
+Os saves (`SAVE/savedat1..16.dat`, `bonus.dat`, `batrank.dat`) e o `config.ini`
+são criados na pasta privada do app na **eNAND**. O `RE1DATA.PAK` é **somente
+leitura**. Nenhuma escrita pode sair da pasta do app: caminhos absolutos,
+prefixos `fs:`/`mmc4:`/drive e segmentos `..` são recusados pelo runtime.
 
 ---
 
